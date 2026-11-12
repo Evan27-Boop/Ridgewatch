@@ -256,7 +256,7 @@ class GpsReader(object):
         self.candidates = candidates
         self.state = NmeaState()
         self.lock = threading.Lock()
-        self.status = "looking for a GPS receiver"
+        self.status = "Searching for a GPS receiver"
         self.port = None
         self._stop = False
         self.thread = threading.Thread(target=self._run, name="gps", daemon=True)
@@ -300,7 +300,7 @@ class GpsReader(object):
                         port = cand
                         break
                 if not port:
-                    self._set("no GPS receiver found")
+                    self._set("No GPS receiver detected")
                     time.sleep(10)
                     continue
             else:
@@ -309,7 +309,7 @@ class GpsReader(object):
                 stream = _open_port(port, self.baud)
             except Exception as e:
                 fails += 1
-                self._set("GPS on %s: can't open (%s)" % (port, e.__class__.__name__))
+                self._set("GPS on %s: cannot open (%s)" % (port, e.__class__.__name__))
                 time.sleep(min(10, 2 * fails))
                 continue
             fails = 0
@@ -328,7 +328,7 @@ class GpsReader(object):
                     stream.close()
                 except Exception:
                     pass
-            self._set("GPS unplugged or stopped (%s)" % port)
+            self._set("GPS disconnected (%s)" % port)
             time.sleep(2)
 
 

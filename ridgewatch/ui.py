@@ -14,7 +14,7 @@ from .panels import UNI, Palette, Panels
 
 
 STATUS_HOLD = 5.0                   # seconds a new DATA LINK / GPS word must last to beep
-STATUS_QUIET = ("CHECKING", "OFF")  # changes to or from these never beep
+STATUS_QUIET = ("CHECKING", "STANDBY", "OFF")  # changes to or from these never beep
 
 CLIMB_STEP_M = 3.0                  # elevation must move this much to count (GPS altitude jitters)
 
@@ -135,7 +135,7 @@ class UI(Panels):
         if not initial:
             self.store.config["follow"] = True
             self.store.save_config()
-            self.flash("following your location")
+            self.flash("Following the GPS")
         self.dirty = True
 
     def stop_follow(self):
@@ -289,7 +289,7 @@ class UI(Panels):
         if self.driving and not was:
             if self.mode in ("pick", "save"):
                 self.mode = "main"
-                self.flash("driving %s menus locked until you stop" % self.g["dot"], "warn")
+                self.flash("Moving. Menus are locked.", "warn")
             self.dirty = True
         elif was and not self.driving:
             self.dirty = True
@@ -616,15 +616,17 @@ class UI(Panels):
         now = time.time() if now is None else now
         L = self.link
         if not L["ok"] and not L["fail"]:
-            return "CHECKING", "label", "no contact yet"
+            if not self.view_loc():               # nothing to ask about yet: not a link problem
+                return "STANDBY", "label", "No location set"
+            return "CHECKING", "label", "No reply yet"
         if L["fail"] > L["ok"]:
             since = L["down_since"] or L["fail"]
-            return "OFFLINE", "err", "down %s" % views.ago(now - since).replace(" ago", "")
+            return "OFFLINE", "err", "Down %s" % views.ago(now - since).replace(" ago", "")
         if now - L["ok"] > 900:
-            return "STALE", "warn", "no contact %s" % views.ago(now - L["ok"]).replace(" ago", "")
+            return "STALE", "warn", "No reply for %s" % views.ago(now - L["ok"]).replace(" ago", "")
         if L["trouble"] and now - L["trouble"] < 600:
-            return "LIMITED", "warn", "NWS having trouble"
-        return "ONLINE", "ok", "contact %s" % views.ago(now - L["ok"])
+            return "LIMITED", "warn", "NWS is returning errors"
+        return "ONLINE", "ok", "Last reply %s" % views.ago(now - L["ok"])
 
     def signal_state(self, now=None):
         """(border spec, [(text, spec)...] first line, second line) for the SIGNAL tile:
@@ -632,51 +634,53 @@ class UI(Panels):
         now = time.time() if now is None else now
         g = self.g
         if not self.follow:
-            return "where", [("—", "dim")], "needs follow mode (press f)"
+            return "where", [("—", "dim")], "Follow mode is off"
         word = self.link_state(now)[0]
+        if word == "STANDBY":
+            return "where", [("—", "dim")], "No GPS position"
         if word == "CHECKING":
-            return "where", [("checking" + g["ell"], "label")], ""
+            return "where", [("Checking", "label")], ""
         if word in ("ONLINE", "LIMITED"):
             return "where", [("● ", "ok"), ("online", "ok")], \
-                "if it drops, this points back to it"
+                "Tracks the last point with a connection"
         spot, here = self.signal_spot, self.view_loc()
         if not spot or not here:
-            return "warn", [("offline", "warn")], "no online spot saved yet"
+            return "warn", [("offline", "warn")], "No connection point recorded yet"
         km = geo.km_between(here["lat"], here["lon"], spot[0], spot[1])
         if km < 0.3:
-            where = "right about here"
+            where = "At this position"
         else:
             where = "%s%.1f mi %s" % (g["approx"], km / 1.609344,
                                       geo.compass(geo.bearing(here["lat"], here["lon"], spot[0], spot[1])))
         return "warn", [(where, "warn"), ("   last online %s" % views.ago(now - spot[2]), "label")], \
-            "where you last had internet"
+            "Last point with a connection"
 
     def gps_state(self):
         """(word, color spec, detail) for the GPS box."""
         if not self.follow:
-            return "OFF", "label", "press f to follow"
+            return "OFF", "label", "Follow mode is off. Press F."
         fix = self.fix
         kind, text = self.locator.gps_status() if self.locator else ("none", "no GPS")
         if fix and fix.source == "gps" and kind == "fix":
             word = {3: "3D FIX", 2: "2D FIX"}.get(fix.mode, "GPS FIX")
             return word, ("warn" if fix.mode == 2 else "ok"), None
         if kind == "searching":
-            return "NO FIX", "err", "no satellites yet"
+            return "NO FIX", "err", "Acquiring satellites"
         return "NO GPS", "err", self.gps_short(text)
 
     @staticmethod
     def gps_short(text):
         """The GPS reader's status, short enough for the GPS box (the port is in its title)."""
         text = text or "no GPS"
-        m = re.match(r"GPS on (\S+): can't open", text)
+        m = re.match(r"GPS on (\S+): cannot open", text)
         if m:
-            return "can't open %s" % m.group(1)
+            return "Cannot open %s" % m.group(1)
         if re.match(r"GPS on \S+: waiting for data", text):
-            return "port open, no data"
-        if text.startswith("GPS unplugged"):
-            return "unplugged or stopped"
-        if text == "no GPS receiver found":
-            return "none plugged in"
+            return "Port open, no data"
+        if text.startswith("GPS disconnected"):
+            return "Receiver disconnected"
+        if text == "No GPS receiver detected":
+            return "No receiver detected"
         return text
 
     def start_fetch(self):
@@ -709,7 +713,7 @@ class UI(Panels):
         self.retry = 0
         self.store.config["last"] = self.loc
         if not self.store.save_config():
-            self.flash("couldn't save settings to " + self.store.home, "warn")
+            self.flash("Could not save settings to " + self.store.home, "warn")
         self.mode = "main"
         self.start_fetch()
 
@@ -732,7 +736,7 @@ class UI(Panels):
         if k in ("q", "Q", "quit"):
             return "quit"
         if self.driving and isinstance(k, str) and len(k) == 1 and k in "fFlL/sS123456789":
-            self.flash("not while driving %s stop first" % self.g["dot"], "warn")
+            self.flash("Locked while moving", "warn")
             return None
         if k in ("d", "D"):
             i = theme.MODES.index(self.display) if self.display in theme.MODES else 0
@@ -744,11 +748,11 @@ class UI(Panels):
         elif k in ("r", "R"):
             if self.follow and not self.fix:
                 self.start_fetch()
-                self.flash("waiting for a location fix", "warn")
+                self.flash("Waiting for a GPS fix", "warn")
             elif not self.view_loc():
-                self.flash("pick a location first (press l)", "warn")
+                self.flash("Set a location first. Press L.", "warn")
             elif self.fetcher.busy:
-                self.flash("already updating")
+                self.flash("Update already in progress")
             else:
                 self.start_fetch()
                 for e in self.store.cache["feeds"].values():
@@ -758,7 +762,7 @@ class UI(Panels):
                 self.stop_follow()
                 if self.loc:
                     self.next_refresh = 0
-                    self.flash("follow off · showing %s" % self.loc["name"])
+                    self.flash("Follow mode off. Showing %s." % self.loc["name"])
                 else:
                     self.open_picker()
             else:
@@ -770,14 +774,14 @@ class UI(Panels):
         elif k in ("s", "S"):
             if self.follow:
                 if not self.fix:
-                    self.flash("no live location to save yet", "warn")
+                    self.flash("No GPS position to save yet", "warn")
                 else:
                     label = self.place_label(self.fix.lat, self.fix.lon)[0]
                     self.save_target = settings.make_location(label, self.fix.lat, self.fix.lon, label)
                     self.save_text = label[:32]
                     self.mode = "save"
             elif not self.loc:
-                self.flash("pick a location first (press l)", "warn")
+                self.flash("Set a location first. Press L.", "warn")
             else:
                 self.save_target = self.loc
                 i = self.store.saved_index(self.loc)
@@ -793,7 +797,7 @@ class UI(Panels):
             if n <= len(saved):
                 self.set_location(saved[n - 1])
             else:
-                self.flash("no saved location %d yet (press s to save one)" % n, "warn")
+                self.flash("No saved location %d. Press S to save one." % n, "warn")
         return None
 
     def key_rain(self, k):
@@ -827,11 +831,11 @@ class UI(Panels):
             ok = self.store.save_config()
             i = self.store.saved_index(saved) + 1
             if not ok:
-                self.flash("couldn't write settings file", "err")
+                self.flash("Could not write the settings file", "err")
             elif i <= 9:
-                self.flash("saved as %s, press %d to jump here" % (name, i))
+                self.flash("Saved as %s. Press %d to return here." % (name, i))
             else:
-                self.flash("saved as %s (in the location list)" % name)
+                self.flash("Saved as %s" % name)
             self.mode = "main"
         elif k == "backspace":
             self.save_text = self.save_text[:-1]
@@ -889,7 +893,7 @@ class UI(Panels):
                 p["query"] = ""
                 self.refresh_pick()
             else:
-                self.flash("pick a location to start (or press Ctrl+C to quit)", "warn")
+                self.flash("Set a location to start, or press Ctrl+C to quit", "warn")
         elif k == "quit":
             return "quit"
         elif k in ("up", "down", "pgup", "pgdn", "home", "end") and n:
@@ -898,7 +902,7 @@ class UI(Panels):
         elif k == "enter":
             if not n:
                 if p["query"].strip() and not self.places.ready():
-                    self.flash("town list still loading, one second", "warn")
+                    self.flash("Place data is still loading", "warn")
                 return None
             kind, loc, _, _ = p["items"][p["sel"]]
             if kind == "follow":
@@ -907,7 +911,7 @@ class UI(Panels):
                     self.start_follow()
                 return None
             if kind == "coords" and not places_mod.in_nws_area(loc["lat"], loc["lon"]):
-                self.flash("that spot is outside the US area NWS covers - check the minus sign",
+                self.flash("Outside the NWS coverage area. Check the sign of the longitude.",
                            "err", 6)
                 return None
             self.set_location(loc)
@@ -916,7 +920,7 @@ class UI(Panels):
             if kind == "saved":
                 self.store.forget_location(loc)
                 self.store.save_config()
-                self.flash("forgot %s" % loc["name"])
+                self.flash("Removed %s" % loc["name"])
                 self.refresh_pick()
         elif k == "backspace":
             p["query"] = p["query"][:-1]

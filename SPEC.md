@@ -42,6 +42,15 @@ will also show police and fire radio calls as text.
 - **No key presses needed while driving.** Everything that matters is visible or audible
   without touching it. Menus lock while moving.
 
+## Wording
+
+Messages on screen are professional, clear and concise:
+
+- A status is one capitalized word (ONLINE, STANDBY, NO GPS). The line under it says
+  what is true; the next line says what to do about it, if anything.
+- Full words, sentence case, no slang, no ellipses, no contractions.
+- A message names the real cause. "No location set" is not "data link down".
+
 ## Input
 
 Keyboard now. Touch (tap a tile to open its details) comes with the tablet setup.

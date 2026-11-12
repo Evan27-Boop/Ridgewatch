@@ -355,13 +355,17 @@ class StatusBoxes(unittest.TestCase):
 
     def link(self):
         return types.SimpleNamespace(link={"ok": 0.0, "fail": 0.0, "down_since": None,
-                                           "msg": "", "trouble": 0.0}, g=UNI, follow=False)
+                                           "msg": "", "trouble": 0.0}, g=UNI, follow=False,
+                                     view_loc=lambda: {"lat": 34.7, "lon": -82.8})
 
     def test_data_link_states(self):
         st = self.link()
         state = lambda now: ui.UI.link_state(st, now)[:2]   # noqa: E731
         note = lambda err, nws_side=False: ui.UI.link_note(st, err, nws_side)  # noqa: E731
         self.assertEqual(state(1000), ("CHECKING", "label"))
+        nowhere = self.link()
+        nowhere.view_loc = lambda: None                      # no location: nothing to ask about
+        self.assertEqual(ui.UI.link_state(nowhere, 1000)[:2], ("STANDBY", "label"))
         note(None)
         now = st.link["ok"]
         self.assertEqual(state(now + 60), ("ONLINE", "ok"))
@@ -393,8 +397,8 @@ class StatusBoxes(unittest.TestCase):
         self.assertEqual(gps("searching", "no satellite fix yet", None), ("NO FIX", "err"))
         self.assertEqual(gps("none", "no GPS receiver found", None), ("NO GPS", "err"))
         self.assertEqual(gps("fix", "/dev/ttyGPS", fix3, follow=False), ("OFF", "label"))
-        self.assertEqual(ui.UI.gps_short("GPS on /dev/ttyGPS: can't open (PermissionError)"),
-                         "can't open /dev/ttyGPS")
+        self.assertEqual(ui.UI.gps_short("GPS on /dev/ttyGPS: cannot open (PermissionError)"),
+                         "Cannot open /dev/ttyGPS")
 
     def test_status_change_beeps_once(self):
         words = {"link": "CHECKING", "gps": "NO FIX"}
@@ -692,13 +696,14 @@ class Dashboard(unittest.TestCase):
     def test_follow_with_no_gps(self):
         code, out, crashed = self.run_app(["--follow"])
         self.assertEqual((code, crashed), (0, False))
-        self.assertIn("waiting for", out)
+        self.assertIn("NO LOCATION", out)                    # alerts say why they're empty
+        self.assertIn("STANDBY", out)                        # not OFFLINE: nothing to ask yet
         self.assertIn("NO GPS", out)
 
     def test_small_window_asks_for_more_room(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"], size=(24, 80))
         self.assertEqual((code, crashed), (0, False))
-        self.assertIn("make the window bigger", out)
+        self.assertIn("Window too small. Needs 120x36; this is 80x24.", out)
 
     def test_needs_256_colors(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"], term="vt100", seconds=1.5)

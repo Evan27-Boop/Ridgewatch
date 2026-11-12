@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.1 (2026-11-12)
+
+- **DATA LINK shows STANDBY** ("No location set") when there is no location yet, where it
+  used to look like the internet was down. ALERTS shows NO LOCATION with what to do.
+- **Messages rewritten** to one style: what is true, then what to do. The rule is in
+  `SPEC.md` under Wording.
+
 ## 3.0.0 (2026-11-12): Ridgewatch
 
 weather-tui becomes Ridgewatch, with a written spec (`SPEC.md`) and git history.

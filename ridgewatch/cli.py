@@ -86,8 +86,8 @@ def _plain(store, loc, fetch=True):
     if fetch and store.config.get("follow"):
         loc = _follow_loc(store) or loc
     if not loc:
-        print("No location yet. Run it once without --plain to pick one, "
-              "or use --place / --coords / --follow.")
+        print("No location set. Use --place, --coords or --follow, "
+              "or run ./rw and press L.")
         return 2
     code = plain.run(store, loc, fetch=fetch)
     for note in store.notes:

@@ -196,7 +196,7 @@ class Panels(Cluster):
         self.scr.erase()
         H, W = self.scr.getmaxyx()
         if not self.cluster_fits(H - 2, W):
-            text = "make the window bigger: %dx%d needed, this is %dx%d" % (
+            text = "Window too small. Needs %dx%d; this is %dx%d." % (
                 CLUSTER_MIN_W, CLUSTER_MIN_H + 2, W, H)
             self.put(H // 2, max(0, (W - len(text)) // 2), text, "warn")
             self.scr.noutrefresh()
@@ -246,7 +246,7 @@ class Panels(Cluster):
         elif self.follow:
             status, level = "", "warn"            # the label already says "waiting for location"
         else:
-            status, level = "no location yet", "warn"
+            status, level = "No location set", "warn"
         if not flashing:
             level = {"busy": "ok"}.get(level, level)
         # the location name wins over the status text when space is tight
@@ -288,7 +288,7 @@ class Panels(Cluster):
         if self.follow:
             vl = self.follow_loc
             if not vl:
-                return "following", "waiting for location"
+                return "following", "No GPS position"
             label = self.place_label(vl["lat"], vl["lon"])[0]
             return "following", label if self.fix else "last known: " + label
         if not self.loc:
@@ -347,8 +347,8 @@ class Panels(Cluster):
         """The gauge cluster (cluster.py), or a prompt when no place is picked yet."""
         if not self.view_loc() and not self.follow:
             self.box(y, x, h, w, "RIDGEWATCH", "line")
-            self.put(y + 2, x + 3, "No location yet. Press l to pick one, or f to follow", "value")
-            self.put(y + 3, x + 3, "your GPS.", "value")
+            self.put(y + 2, x + 3, "No location set.", "value")
+            self.put(y + 3, x + 3, "Press L to set one, or F to follow the GPS.", "value")
             return
         self.draw_cluster(y, x, h, w, entry)
 
@@ -373,9 +373,9 @@ class Panels(Cluster):
             if len(sep.join(bits)) > w - 4:       # narrow: drop the word, keep the numbers
                 bits = [b.replace(" " + word, "") for b in bits]
             gdetail = sep.join(bits)
-        hint = {"NO FIX": "needs a clear view of the sky",
-                "NO GPS": "plug in the GPS (or check the cable)",
-                "2D FIX": "too few satellites for elevation"}.get(gps[0], "")
+        hint = {"NO FIX": "Needs a clear view of the sky",
+                "NO GPS": "Connect a receiver or check the cable",
+                "2D FIX": "Too few satellites for elevation"}.get(gps[0], "")
         boxes = [("DATA LINK", link[0], link[1], link[2], "label", "", ""),
                  ("GPS", gps[0], gps[1], gdetail or "", gspec2,
                   self.gps_port() if self.follow else "", hint)]
@@ -433,9 +433,9 @@ class Panels(Cluster):
         elif entry.get("fatal"):
             line1 = [(entry["fatal"], "err")]
         elif self.fetcher.busy:
-            line1 = [("loading" + g["ell"], "label")]
+            line1 = [("Loading", "label")]
         else:
-            line1 = [("no current conditions", "warn")] + \
+            line1 = [("No current conditions", "warn")] + \
                 ([(" (%s)" % n["error"], "label")] if n["error"] else [])
         self.runs(iy, ix, line1, iw)
         if ih < 2:
@@ -467,9 +467,9 @@ class Panels(Cluster):
             if p["total_in"] is not None and p["total_in"] >= 0.01:
                 total = [sep, ("%s%.2f in" % (g["approx"], p["total_in"]), "value")]
         elif entry.get("hourly"):
-            rest = [("the saved forecast has run out", "warn")]
+            rest = [("Saved forecast has expired", "warn")]
         elif not self.fetcher.busy:
-            rest = [("no forecast" + ((" (%s)" % p["hourly_err"]) if p["hourly_err"]
+            rest = [("No forecast" + ((" (%s)" % p["hourly_err"]) if p["hourly_err"]
                                       else ""), "warn")]
         # the rain outlook is kept over the exact high/low times when space is tight
         line2 += first_fit([hl_full + rest + total, hl_full + rest, hl_short + rest + total,
@@ -603,9 +603,9 @@ class Panels(Cluster):
 
     def alert_note(self):
         if self.rough():
-            return ("location approximate (%s)" % self.rough(), "warn")
+            return ("Position is approximate (%s)" % self.rough(), "warn")
         if self.follow and not self.fix and self.view_loc():
-            return ("for your last known location", "warn")
+            return ("For the last known position", "warn")
         return None
 
     CAT_SPEC = {"road": "pick", "fire": "hot"}
@@ -721,7 +721,7 @@ class Panels(Cluster):
             elif self.fetcher.busy:
                 msg = [("loading forecast" + g["ell"], "label")]
             elif entry.get("hourly"):
-                msg = [("the saved forecast has run out", "value"),
+                msg = [("Saved forecast has expired", "value"),
                        (p["hourly_err"] or "it refreshes when NWS can be reached", "warn")]
             else:
                 msg = [("no forecast", "value"), (p["hourly_err"] or "", "warn")]

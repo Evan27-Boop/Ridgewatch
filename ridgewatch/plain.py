@@ -87,7 +87,7 @@ def report(loc, entry, now=None, unicode_ok=None):
             start = views.fmt_hour(p["hours"][0][0], p["hours"][0][1], short=True)
             lines.append("        %s  (hourly chance from %s)" % (spark, start))
     elif entry.get("hourly"):
-        lines.append("PRECIP  the saved forecast has run out" +
+        lines.append("PRECIP  Saved forecast has expired" +
                      ((" (%s)" % p["hourly_err"]) if p["hourly_err"] else ""))
     else:
         lines.append("PRECIP  no forecast" +

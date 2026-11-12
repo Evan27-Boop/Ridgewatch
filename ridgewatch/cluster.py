@@ -152,10 +152,10 @@ class Cluster(object):
 
     def no_speed_reason(self, fix):
         if not self.follow:
-            return "follow mode off %s press f" % self.g["dot"]
+            return "Follow mode is off. Press F to use the GPS."
         if fix is None:
-            return "no position yet"
-        return "needs the GPS"
+            return "No GPS position"
+        return "No speed from the GPS"
 
     # ------------------------------------------------------------- gauges --
     def gauge_speed(self, y, x, h, w, drows):
@@ -205,11 +205,10 @@ class Cluster(object):
             if when:
                 line1.append((" at %s" % when, "label"))
         elif gps:
-            side += [[("TRIP", "label")], [("starts when you drive", "label")]]
+            side += [[("TRIP", "label")], [("Starts when the vehicle moves", "label")]]
         self.gauge(y, x, h, w, "SPEED", "where", num, "title", "mph", side, line1, line2, drows)
 
     def gauge_grade(self, y, x, h, w, drows):
-        g = self.g
         fix = self.fix if self.follow else None
         gps = fix is not None and fix.source == "gps"
         terrain = self.terrain() if gps else None
@@ -232,15 +231,14 @@ class Cluster(object):
             if terrain.get("mile_ft") is not None:
                 side.append([("last mile ", "label"), ("%+d ft" % round(terrain["mile_ft"]), "value")])
         if long_desc:
-            line2 = [("long descent: -%s ft in 2 mi %s lower gear" % (
-                "{:,}".format(int(drop)), g["dot"]), "err")]
+            line2 = [("Long descent: -%s ft in 2 mi. Use a lower gear." % "{:,}".format(int(drop)), "err")]
         elif gps and fix.mode == 2:
-            line2 = [("2D fix: elevation and grade unreliable", "warn")]
+            line2 = [("2D fix. Elevation and grade are unreliable.", "warn")]
         elif not gps:
             line2 = [(self.no_speed_reason(fix),
                       "label")]
         elif gr is None:
-            line2 = [("needs a few hundred feet of driving", "label")]
+            line2 = [("Calculating. Needs more distance.", "label")]
         # a fixed -12% .. +12% scale, like a real gauge
         line1 = self.grade_bar(gr, w - 5, spec)
         self.gauge(y, x, h, w, "GRADE", spec, num, spec if spec != "where" else "title", "%",
@@ -276,15 +274,15 @@ class Cluster(object):
             num = "{:,}".format(int(round(alt)))
             if gps and fix.mode == 2:
                 spec = "warn"
-                line2 = [("2D fix: elevation unreliable", "warn")]
+                line2 = [("2D fix. Elevation is unreliable.", "warn")]
         else:
             vl = self.view_loc()
             elev = (self.store.entry(vl).get("hourly") or {}).get("elev_ft") if vl else None
             if elev is not None:
                 num = "{:,}".format(int(elev))
-                line1 = [("from the map, not measured", "label")]
+                line1 = [("Forecast-grid elevation, not measured", "label")]
                 if self.follow:
-                    line2 = [("plug in the GPS for live elevation", "label")]
+                    line2 = [("Connect a GPS for measured elevation", "label")]
         if terrain:
             spark = terrain["spark"]
             if len(spark) >= 8 and terrain["span_km"] >= 1.0:
@@ -312,9 +310,9 @@ class Cluster(object):
         fix = self.fix if self.follow else None
         if not vl:
             self.box(y, x, h, w, "HERE", "warn")
-            self.put(y + 1, x + 2, ("waiting for a location" + g["ell"])[: w - 4], "warn")
+            self.put(y + 1, x + 2, "No position"[: w - 4], "warn")
             status = dot.join(self.locator.describe()) if self.locator else ""
-            self.put(y + 2, x + 2, status[: w - 4], "label")
+            self.put(y + 2, x + 2, (status + ". Press L to set a location.")[: w - 4], "label")
             return
         place, county = self.place_label(vl["lat"], vl["lon"])
         lost = self.follow and not fix
@@ -336,11 +334,11 @@ class Cluster(object):
                     parts.append((" ~%d min" % max(1, round(mi / spd * 60)), "label"))
             line2 = parts
         elif not self.follow:
-            line2 = [("picked location %s press f to follow your GPS" % g["dot"], "label")]
+            line2 = [("Set location. Press F to follow the GPS.", "label")]
         elif fix:
-            line2 = [("not moving %s towns ahead show while driving" % g["dot"], "label")]
+            line2 = [("Stationary. Towns ahead appear while moving.", "label")]
         else:
-            line2 = [("no fix right now %s showing where you last were" % g["dot"], "warn")]
+            line2 = [("GPS fix lost. Showing the last known position.", "warn")]
         self.runs(y + 2, x + 2, line2, iw)
         if self.follow and self.entered and time.time() - self.entered[1] < 600:
             self.put(y + 3, x + 2, ("entered %s %s" % (self.entered[0],
@@ -363,9 +361,9 @@ class Cluster(object):
             acc = locate.fmt_accuracy(fix.acc_m) if fix.acc_m else ""
             text = ("%s %s %s" % (acc, self.g["dot"], src)) if acc else src
         elif self.follow:
-            text = "last known position"
+            text = "Last known position"
         else:
-            text = "picked location"
+            text = "Set location"
         self.put(y + 3, x + 2, text[:iw], "label")
 
     def tile_signal(self, y, x, h, w):
@@ -380,8 +378,8 @@ class Cluster(object):
         val = self._er_val if vl else None
         if not val:
             self.box(y, x, h, w, "ER", "where")
-            msg = "loading the hospital list" + self.g["ell"] if vl and not self.hospitals.ready() \
-                else "no hospital within 125 mi" if vl else ""
+            msg = "Loading hospital data" if vl and not self.hospitals.ready() \
+                else "No hospital within 125 mi" if vl else ""
             self.put(y + 1, x + 2, (msg or "—")[: w - 4], "label" if msg else "dim")
             return
         hosp, dist = val
@@ -392,9 +390,9 @@ class Cluster(object):
         name = "%s, %s" % (hospitals.short_name(hosp, max(20, iw - len(dist) - 12)), hosp.city)
         self.runs(y + 1, x + 2, [(dist, spec if spec != "where" else "title"), ("   ", "label"),
                                  (name, "value")], iw)
-        note = [("straight-line distance", "label")]
+        note = [("Straight-line distance", "label")]
         if not hosp.listed:
-            note.append((" %s ER not listed for this hospital" % self.g["dot"], "warn"))
+            note.append((" %s emergency room not confirmed" % self.g["dot"], "warn"))
         if km > ER_FAR_KM:
             note.append((" %s far from emergency care" % self.g["dot"], "warn"))
         self.runs(y + 2, x + 2, note, iw)
@@ -405,25 +403,25 @@ class Cluster(object):
         g = self.g
         if not a["known"]:
             if self.follow and not self.view_loc():
-                return "WAITING", "label", "for your location", ""
+                return "NO LOCATION", "warn", "Alerts need a position", "Connect a GPS or press L"
             if self.fetcher.busy:
                 return "CHECKING", "label", "", ""
             if a["error"] in views.OFFLINE_ERRORS:
-                return "DATA LINK DOWN", "warn", "alerts not checked yet", ""
+                return "DATA LINK DOWN", "warn", "Alerts not checked yet", ""
             return "ALERTS UNKNOWN", "warn", a["error"] or "", ""
         if not a["trusted"]:
-            return "NOT UPDATING", "warn", "last checked %s" % views.ago(a["age"]), \
-                "data link down" if a["offline"] else "NWS not answering"
+            return "NOT UPDATING", "warn", "Last checked %s" % views.ago(a["age"]), \
+                "Data link down" if a["offline"] else "NWS is not responding"
         worst = next((r for r in self.reports if r["tier"] == "official" and r["sev"]), None)
         if worst:
             line1 = (" %s " % g["dot"]).join(x for x in (worst["where"], worst["when"]) if x)
             return worst["kind"], self.report_spec(worst), line1, \
-                "beeping" if self.alarm_on() else ""
+                "Alarm sounding" if self.alarm_on() else ""
         n = len(self.reports)
         if n:
-            return "NO WARNINGS", "ok", "checked %s" % views.ago(a["age"]), \
+            return "NO WARNINGS", "ok", "Checked %s" % views.ago(a["age"]), \
                 "%d other item%s listed" % (n, "" if n == 1 else "s")
-        return "ALL CLEAR", "ok", "checked %s" % views.ago(a["age"]), "official + local reports"
+        return "ALL CLEAR", "ok", "Checked %s" % views.ago(a["age"]), "Nothing active nearby"
 
     def big_badge(self, y, x, w, rows, word, spec):
         """A solid colored block, `rows` tall, with the word centered (wrapped if long)."""
@@ -452,7 +450,7 @@ class Cluster(object):
         first = next((r for r in reports if r["sev"]), None)
         rspec = self.report_spec(first) if first else ("label" if bits else "dim")
         if a["known"] and not a["trusted"]:
-            right, rspec = "out of date", "warn"
+            right, rspec = "Out of date", "warn"
         flash_on = self.alarm_on() and int(time.time() * 2) % 2 == 0
         from .panels import sev_spec
         border = sev_spec(self.alarm_items[0]["severity"]) if flash_on else \
@@ -478,7 +476,7 @@ class Cluster(object):
             list_h -= 1
         rows = self.alert_rows(a, list_h, status=False)
         if not rows and a["known"]:
-            rows = [([("nothing active near you", "label")], "")]
+            rows = [([("Nothing active nearby", "label")], "")]
         for i, (parts, source) in enumerate(rows[:list_h]):
             used = sum(len(p[0]) for p in parts)
             if source and used + len(source) + 2 <= lw:
