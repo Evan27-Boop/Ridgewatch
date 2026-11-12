@@ -1,16 +1,16 @@
 """The full-screen dashboard: what it's showing, follow mode, alarms, keys
-and the main loop. Drawing is in panels.py; the screen driver comes from term.py.
+and the main loop. Drawing is in panels.py and cluster.py.
 """
 
+import curses
 import os
 import queue
 import re
 import time
 
-from . import feeds, follow, geo, hospitals, locate, news, nws, settings, sun, theme, views
+from . import feeds, follow, geo, hospitals, locate, nws, settings, sun, theme, views
 from . import places as places_mod
-from .panels import ASCII, UNI, Palette, Panels
-from .term import BUILTIN, curses
+from .panels import UNI, Palette, Panels
 
 
 STATUS_HOLD = 5.0                   # seconds a new DATA LINK / GPS word must last to beep
@@ -48,8 +48,8 @@ class UI(Panels):
     def __init__(self, scr, store, loc, opts):
         self.scr = scr
         self.store = store
-        self.g = ASCII if opts.get("ascii") else UNI
-        self.pal = Palette(opts.get("colors", "auto"))
+        self.g = UNI
+        self.pal = Palette()
         self.places = places_mod.PlaceIndex()
         self.places.load_in_background()
         self.hospitals = hospitals.HospitalIndex()
@@ -93,7 +93,7 @@ class UI(Panels):
         self.ahead_memory = {}
         self._states_key, self._states = None, []
         self._nearby_asked = 0
-        # wildfires, space weather and state 511 roads: their own thread too
+        # wildfires and state 511 roads: their own thread too
         self.feedsf = feeds.FeedFetcher()
         self.reports = []                       # the alerts list (views.build_reports)
         self.trip = None                        # this follow session: distance, time, top speed
@@ -105,11 +105,6 @@ class UI(Panels):
         self.beeps = []
         self.status_seen = {}                   # DATA LINK / GPS word last beeped about
         self.save_target = None
-        # nearby headlines: their own thread, so news never holds up weather alerts
-        self.newsf = news.NewsFetcher() if store.config.get("headlines") else None
-        self.news_area = None
-        self.news_wait = 0
-        self._area_key = None
         for note in store.notes:
             self.flash(note, "warn", 8)
         if store.config.get("follow"):
@@ -131,8 +126,7 @@ class UI(Panels):
         self.region, self.entered = None, None
         if self.locator is None:
             c = self.store.config
-            self.locator = locate.Locator(c.get("gps_port", "auto"), c.get("gps_baud", 9600),
-                                          c.get("windows_location", True))
+            self.locator = locate.Locator(c.get("gps_port", "auto"), c.get("gps_baud", 9600))
         last = (self.store.cache["locations"].get("follow") or {}).get("follow_full")
         if last and self.follow_loc is None:
             self.follow_loc = self.make_follow_loc(last["lat"], last["lon"])
@@ -197,7 +191,7 @@ class UI(Panels):
         return val
 
     def trip_add(self, fix):
-        """Count distance and moving time from GPS fixes (Windows location is too rough)."""
+        """Count distance and moving time from GPS fixes."""
         t = self.trip
         if t is None:
             return
@@ -362,10 +356,8 @@ class UI(Panels):
                 [i["km"] for i in items] != [i["km"] for i in self.nearby_items]:
             self.dirty = True
         self.nearby_items = items
-        n = self.news_view()
         reports = views.build_reports(views.view_alerts(entry, now), items,
-                                      n["items"] if n else [], self.store.cache["feeds"],
-                                      vl["lat"], vl["lon"], now)
+                                      self.store.cache["feeds"], vl["lat"], vl["lon"], now)
         if [(r["id"], r["where"], r["when"]) for r in reports] != \
                 [(r["id"], r["where"], r["when"]) for r in self.reports]:
             self.dirty = True
@@ -376,7 +368,7 @@ class UI(Panels):
             self.raise_alarm(fresh, "AHEAD")
 
     def feeds_tick(self, now):
-        """Ask for wildfires, space weather and state 511 roads when they're due."""
+        """Ask for wildfires and state 511 roads when they're due."""
         vl = self.view_loc()
         c = self.store.config
         fc = self.store.cache["feeds"]
@@ -386,8 +378,6 @@ class UI(Panels):
             moved = at and geo.km_between(at[0], at[1], vl["lat"], vl["lon"]) > feeds.FIRE_MOVE_KM
             jobs.append(("fires", ("fires", round(vl["lat"], 2), round(vl["lon"], 2)),
                          feeds.FIRE_EVERY, moved))
-        if c.get("space_weather"):
-            jobs.append(("space", ("space",), feeds.SPACE_EVERY, False))
         if vl:
             states = self.nearby_states()
             for st, key in sorted(c.get("keys_511", {}).items()):
@@ -403,59 +393,9 @@ class UI(Panels):
 
     def feed_problems(self):
         """['wildfires: no connection', ...] for sources whose last try failed."""
-        names = {"fires": "wildfires", "space": "space weather", "roads_GA": "511GA",
-                 "roads_NC": "NCDOT"}
+        names = {"fires": "wildfires", "roads_GA": "511GA", "roads_NC": "NCDOT"}
         return ["%s: %s" % (names.get(k, k), v["err"]) for k, v in
                 sorted(self.store.cache["feeds"].items()) if v.get("err")]
-
-    def news_tick(self, now):
-        """Search headlines for the area on screen: every 20 minutes, and soon
-        after you cross into a new county."""
-        vl = self.view_loc()
-        if not self.newsf or not vl or not self.places.ready():
-            return
-        key = (round(vl["lat"], 2), round(vl["lon"], 2))     # ~1 km
-        if key != self._area_key:
-            self._area_key = key
-            area = news.area_for(self.places, vl["lat"], vl["lon"])
-            if (area and area["key"]) != (self.news_area and self.news_area["key"]):
-                self.dirty = True
-            self.news_area = area
-        area = self.news_area
-        if not area or self.newsf.busy or now < self.news_wait:
-            return
-        e = self.store.cache["news"].setdefault(area["key"], {})
-        e["label"] = area["label"]
-        if now < e.get("next", 0):
-            return
-        e["tried"] = now
-        e["next"] = now + news.EVERY_SEC
-        self.news_wait = now + news.GAP_SEC
-        self.newsf.request(area)
-
-    def news_view(self):
-        """Headlines for the area on screen, closest first (those that name a town),
-        then the rest newest first. None when headlines are off or there's no spot yet."""
-        vl = self.view_loc()
-        if not self.newsf or not vl:
-            return None
-        e = self.store.cache["news"].get(self.news_area["key"]) if self.news_area else None
-        n = views.view_news(e)
-        n["label"] = n["label"] or (self.news_area or {}).get("label", "")
-        items = []
-        for it in n["items"]:
-            it = dict(it, kind=it.get("kind") or news.kind_of(it["title"]), also=it.get("also", 0))
-            if it.get("town"):
-                km = geo.km_between(vl["lat"], vl["lon"], it["tlat"], it["tlon"])
-                mi = km / 1.609344
-                it["km"] = km
-                it["place"] = ("in %s" % it["town"]) if mi < 1 else "%s, %d mi %s" % (
-                    it["town"], round(mi),
-                    geo.compass(geo.bearing(vl["lat"], vl["lon"], it["tlat"], it["tlon"])))
-            items.append(it)
-        items.sort(key=lambda i: (i.get("km") is None, i.get("km") or 0, -i["time"]))
-        n["items"] = items
-        return n
 
     def rough(self):
         """Accuracy text if the live position is only approximate, else None."""
@@ -532,7 +472,6 @@ class UI(Panels):
                 self.look_tick(now)
                 self.feeds_tick(now)
                 self.nearby_tick(now)
-                self.news_tick(now)
                 self.status_tick(now)
                 self.ring(now)
                 # redraw fast while flashing, slowly when idle (easy on a laptop battery)
@@ -560,8 +499,7 @@ class UI(Panels):
             if ch in ("\n", "\r"):
                 return "enter"
             if ch == "\x1b":
-                # the built-in screen already turned arrow-key codes into keys
-                return "esc" if BUILTIN else self._escape_sequence()
+                return self._escape_sequence()
             if ch in ("\x7f", "\x08"):
                 return "backspace"
             if ch == "\x15":
@@ -618,29 +556,6 @@ class UI(Panels):
                 nxt = e.get("next")
                 e.clear()
                 e.update(data, next=nxt)
-            self.dirty = True
-        while self.newsf:
-            try:
-                key, data, error = self.newsf.results.get_nowait()
-            except queue.Empty:
-                break
-            e = self.store.cache["news"].setdefault(key, {})
-            self.link_note(error)
-            vl = self.view_loc()
-            if data and vl and self.places.ready():
-                for it in data["items"]:              # put stories that name a town on the map
-                    hit = news.place_in(it["title"], self.places, key.split("|")[0],
-                                        vl["lat"], vl["lon"])
-                    if hit:
-                        it["town"], it["tlat"], it["tlon"] = hit
-            if error:
-                e["err"] = error                      # keep what we had; retry 2, 4... min
-                e["retry"] = min(2 * (e.get("retry") or 60), news.EVERY_SEC)
-                e["next"] = time.time() + e["retry"]
-            else:
-                e.update(data)
-                e.pop("err", None)
-                e["retry"] = 0
             self.dirty = True
         while True:
             try:
@@ -717,12 +632,12 @@ class UI(Panels):
         now = time.time() if now is None else now
         g = self.g
         if not self.follow:
-            return "where", [("—" if g is UNI else "-", "dim")], "needs follow mode (press f)"
+            return "where", [("—", "dim")], "needs follow mode (press f)"
         word = self.link_state(now)[0]
         if word == "CHECKING":
             return "where", [("checking" + g["ell"], "label")], ""
         if word in ("ONLINE", "LIMITED"):
-            return "where", [("● " if g is UNI else "", "ok"), ("online", "ok")], \
+            return "where", [("● ", "ok"), ("online", "ok")], \
                 "if it drops, this points back to it"
         spot, here = self.signal_spot, self.view_loc()
         if not spot or not here:
@@ -745,8 +660,6 @@ class UI(Panels):
         if fix and fix.source == "gps" and kind == "fix":
             word = {3: "3D FIX", 2: "2D FIX"}.get(fix.mode, "GPS FIX")
             return word, ("warn" if fix.mode == 2 else "ok"), None
-        if fix and fix.source != "gps":
-            return "ROUGH", "warn", "Windows location %s" % locate.fmt_accuracy(fix.acc_m)
         if kind == "searching":
             return "NO FIX", "err", "no satellites yet"
         return "NO GPS", "err", self.gps_short(text)
@@ -807,11 +720,6 @@ class UI(Panels):
                 curses.update_lines_cols()
             except (AttributeError, curses.error):
                 pass
-            if os.name == "nt":
-                try:
-                    curses.resize_term(0, 0)
-                except curses.error:
-                    pass
             self.dirty = True
             return None
         self.dirty = True
@@ -843,10 +751,8 @@ class UI(Panels):
                 self.flash("already updating")
             else:
                 self.start_fetch()
-                if self.news_area:              # headlines too (still at most one a minute)
-                    self.store.cache["news"].setdefault(self.news_area["key"], {})["next"] = 0
                 for e in self.store.cache["feeds"].values():
-                    e["next"] = 0                   # and fires, roads, space weather
+                    e["next"] = 0                   # and fires and roads
         elif k in ("f", "F"):
             if self.follow:
                 self.stop_follow()

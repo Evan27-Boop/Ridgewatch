@@ -1,7 +1,7 @@
-"""weather-tui tests. Run from the project folder:  python -m unittest
+"""ridgewatch tests. Run from the project folder:  python -m unittest
 
 Everything runs offline: NWS is replaced by tests/fake_nws.py, GPS by text
-written to a pseudo-terminal, and Windows pieces by small fakes.
+written to a pseudo-terminal.
 """
 
 import os
@@ -18,10 +18,10 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from tests.fake_nws import (FakeNWS, alert, alerts, fires, grid, hourly, obs,  # noqa: E402
-                            points, road_events, rss, scales, stations)
-from wxtui import (feeds, follow, geo, hospitals, locate, news, nws, panels,  # noqa: E402
-                   places, plain, screen, settings, sun, theme, ui, views)
-from wxtui.panels import UNI  # noqa: E402
+                            points, road_events, stations)
+from ridgewatch import (feeds, follow, geo, hospitals, locate, nws, panels,  # noqa: E402
+                        places, plain, settings, sun, theme, ui, views)
+from ridgewatch.panels import UNI  # noqa: E402
 
 
 def nmea(body):
@@ -100,25 +100,11 @@ class Gps(unittest.TestCase):
         self.assertFalse(s.feed("garbage \x00\xff"))
         self.assertIsNone(s.fix())
 
-    def test_windows_lines(self):
-        kind, f = locate.parse_windows_line("fix 34.7 -82.8 3218.5 NaN NaN NaN")
-        self.assertEqual((kind, f.lat, f.speed_mph, f.alt_m), ("fix", 34.7, None, None))
-        kind, msg = locate.parse_windows_line("status Ready Denied")
-        self.assertIn("Settings", msg)
-        self.assertEqual(locate.parse_windows_line("fix 1,5 2,3 x NaN NaN NaN"), (None, None))
-
-    def test_windows_script_is_one_safe_line(self):
-        one = locate._one_line(locate.WINDOWS_LOCATION_PS)
-        self.assertNotIn("\n", one)
-        self.assertNotIn('"', one)
-        self.assertIn("} catch {", one)
-
     def test_accuracy_text(self):
         self.assertEqual(locate.fmt_accuracy(4.5), "±15 ft")
         self.assertEqual(locate.fmt_accuracy(3218.5), "±2.0 mi")
         self.assertEqual(locate.fmt_accuracy(40000), "±25 mi")
 
-    @unittest.skipIf(os.name == "nt", "uses a Unix pseudo-terminal")
     def test_reads_a_serial_port(self):
         import pty
         master, slave = pty.openpty()
@@ -134,36 +120,6 @@ class Gps(unittest.TestCase):
         finally:
             reader.stop()
             os.close(master)
-
-    def test_finds_windows_com_ports(self):
-        fake = types.ModuleType("winreg")
-        fake.HKEY_LOCAL_MACHINE = 1
-        vals = [(r"\Device\BthModem0", "COM4", 1), (r"\Device\Serial0", "COM1", 1),
-                (r"\Device\USBSER000", "COM7", 1)]
-        fake.OpenKey = lambda k, p: "key"
-        fake.CloseKey = lambda k: None
-
-        def enum(k, i):
-            if i >= len(vals):
-                raise OSError
-            return vals[i]
-        fake.EnumValue = enum
-        old_os, old_mod = locate.os, sys.modules.get("winreg")
-
-        class NT(object):
-            name = "nt"
-
-            def __getattr__(self, a):
-                return getattr(old_os, a)
-        sys.modules["winreg"], locate.os = fake, NT()
-        try:
-            self.assertEqual(locate.candidate_ports(), ["COM7", "COM1"])   # USB first, no Bluetooth
-        finally:
-            locate.os = old_os
-            if old_mod is None:
-                del sys.modules["winreg"]
-            else:
-                sys.modules["winreg"] = old_mod
 
 
 class Nws(unittest.TestCase):
@@ -282,78 +238,6 @@ class Follow(unittest.TestCase):
         self.assertEqual(views.new_urgent(e, [odd]), [odd])       # unsure what it was: tell me
 
 
-class Headlines(unittest.TestCase):
-    def test_picks_recent_safety_news(self):
-        now = time.time()
-        got = news.pick(news.parse_feed(rss({}, now)), now)
-        self.assertEqual([i["title"] for i in got],
-                         ["Crash closes northbound lanes of US 123 near Clemson",
-                          "Pickens County deputies search for missing hiker"])
-        self.assertEqual(got[0]["source"], "WYFF4")            # " - WYFF4" moved out of the title
-        self.assertEqual([i["kind"] for i in got], ["ROAD", "MISSING"])
-        self.assertEqual(got[1]["also"], 1)                    # FOX Carolina had it too
-        self.assertEqual(news.pick(news.parse_feed(rss({"news": "none"}, now)), now), [])
-
-    def test_no_sports(self):
-        """Safety and local awareness only: sports stories stay out even when they
-        use safety words, and real news that sounds a bit like sports stays in."""
-        sports = ["Clemson shuts down Wake Forest in 31-14 win",
-                  "Tigers QB injured in second half, status uncertain",
-                  "Clemson closes out regular season at home Saturday",
-                  "Gamecocks defense under fire after loss to Texas A&M",
-                  "Daniel High wins state title in overtime thriller",
-                  "NASCAR fans face traffic delays leaving Darlington"]
-        news_items = ["Crash closes I-85 southbound near Anderson",
-                      "Homecoming parade closes downtown Clemson roads Friday",
-                      "Game wardens rescue lost hunter in Jocassee Gorges",
-                      "9-1-1 outage reported across Pickens County",
-                      "Road closed 7-9 p.m. for emergency repairs on SC 93",
-                      "Self-defense shooting under investigation in Liberty",
-                      "Deputies come under fire during traffic stop",
-                      "Tiger Boulevard closed after water main break",
-                      "2 dead, 3 injured in Highway 11 wreck"]
-        self.assertEqual([t for t in sports if news.relevant(t)], [])
-        self.assertEqual([t for t in news_items if not news.relevant(t)], [])
-
-    def test_story_types_and_places(self):
-        self.assertEqual(news.kind_of("Tiger Boulevard closed after water main break"), "UTILITY")
-        self.assertEqual(news.kind_of("Man killed in crash on SC 93"), "ROAD")
-        self.assertEqual(news.kind_of("Fire crews battle blaze, deputies investigate"), "FIRE")
-        ix = places.PlaceIndex()
-        ix.load()
-        def where(t):
-            hit = news.place_in(t, ix, "SC", 34.68, -82.84)
-            return hit and hit[0]
-        self.assertEqual(where("Crash closes US 123 near Clemson"), "Clemson")
-        self.assertEqual(where("Easley man charged after shooting"), "Easley")
-        self.assertIsNone(where("Pickens County deputies search for hiker"))  # county, not town
-        self.assertIsNone(where("Central bank raises rates"))                  # not after in/near/at
-        self.assertIsNone(where("Crash near Columbia"))                        # 120 mi: too far
-
-    def test_area_and_search(self):
-        self.assertEqual(news.county_name("Pickens", "SC"), "Pickens County")
-        self.assertEqual(news.county_name("Orleans", "LA"), "Orleans Parish")
-        self.assertEqual(news.county_name("Richmond city", "VA"), "Richmond")
-        self.assertEqual(news.county_name("Nome (CA)", "AK"), "Nome Census Area")
-        ix = places.PlaceIndex()
-        ix.load()
-        area = news.area_for(ix, 34.72, -82.79)
-        self.assertEqual((area["county"], area["town"], area["label"]),
-                         ("Pickens County", "Clemson", "Pickens Co, SC"))
-        url = news.search_url(area)
-        self.assertIn("Pickens+County", url)
-        self.assertIn("when%3A1d", url)
-        self.assertNotIn("34.7", url)                         # names only, never coordinates
-
-    def test_fetcher_survives_errors(self):
-        def broken(url):
-            raise nws.FetchError("no connection", True)
-        f = news.NewsFetcher(getter=broken)
-        f.request({"key": "SC|Pickens", "county": "Pickens County", "town": "", "state": "South Carolina"})
-        key, data, error = f.results.get(timeout=5)
-        self.assertEqual((key, data, error), ("SC|Pickens", None, "no connection"))
-
-
 class Offline(unittest.TestCase):
     """The pieces that work with no signal: sun times, nearest ER, the colors."""
 
@@ -385,8 +269,8 @@ class Offline(unittest.TestCase):
         for normal, (day, night) in theme._PAIRS.items():
             contrast = 1.05 / (theme.luminance(day) + 0.05)
             self.assertGreaterEqual(contrast, 4.5, (normal, day))
-        self.assertEqual(theme.adapt((253, 15, ""), "day")[2], "bold")
-        self.assertEqual(theme.adapt((253, 15, "bold"), "normal"), (253, 15, "bold"))
+        self.assertEqual(theme.adapt((253, ""), "day")[1], "bold")
+        self.assertEqual(theme.adapt((253, "bold"), "normal"), (253, "bold"))
 
 
 class LocationExtras(unittest.TestCase):
@@ -413,7 +297,7 @@ class LocationExtras(unittest.TestCase):
         self.assertEqual(west[0], "Seneca")
 
     def test_trip(self):
-        from wxtui import ui
+        from ridgewatch import ui
         stub = types.SimpleNamespace(trip=ui.new_trip(),
                                      place_label=lambda lat, lon: ("here", ""),
                                      region_check=lambda fix: None)
@@ -430,7 +314,7 @@ class LocationExtras(unittest.TestCase):
         self.assertEqual(stub.trip["t0"], t0)
 
     def test_what_gps_altitude_says(self):
-        from wxtui import ui
+        from ridgewatch import ui
         crumbs = [(i * 0.05, 300.0 + i * 0.05 * 60) for i in range(40)]   # 2 km at a 6% climb
         stub = types.SimpleNamespace(trip={"crumbs": crumbs})
         t = ui.UI.terrain(stub)
@@ -443,7 +327,7 @@ class LocationExtras(unittest.TestCase):
         self.assertIsNone(ui.UI.terrain(types.SimpleNamespace(trip={"crumbs": down[:3]})))
 
     def test_county_line(self):
-        from wxtui import ui
+        from ridgewatch import ui
         labels = iter([("2 mi N of Clemson, SC", "Pickens Co"), ("3 mi W of Clemson, SC", "Oconee Co"),
                        ("1 mi S of Highlands, NC", "Macon Co")])
         stub = types.SimpleNamespace(region=None, entered=None,
@@ -504,15 +388,13 @@ class StatusBoxes(unittest.TestCase):
             return ui.UI.gps_state(st)[:2]
         fix3 = locate.Fix(34.7, -82.8, source="gps", mode=3)
         fix2 = locate.Fix(34.7, -82.8, source="gps", mode=2)
-        win = locate.Fix(34.7, -82.8, acc_m=3000, source="windows")
-        self.assertEqual(gps("fix", "COM3", fix3), ("3D FIX", "ok"))
-        self.assertEqual(gps("fix", "COM3", fix2), ("2D FIX", "warn"))
-        self.assertEqual(gps("none", "no GPS receiver found", win), ("ROUGH", "warn"))
+        self.assertEqual(gps("fix", "/dev/ttyGPS", fix3), ("3D FIX", "ok"))
+        self.assertEqual(gps("fix", "/dev/ttyGPS", fix2), ("2D FIX", "warn"))
         self.assertEqual(gps("searching", "no satellite fix yet", None), ("NO FIX", "err"))
         self.assertEqual(gps("none", "no GPS receiver found", None), ("NO GPS", "err"))
-        self.assertEqual(gps("fix", "COM3", fix3, follow=False), ("OFF", "label"))
-        self.assertEqual(ui.UI.gps_short("GPS on COM3: can't open (PermissionError)"),
-                         "can't open COM3")
+        self.assertEqual(gps("fix", "/dev/ttyGPS", fix3, follow=False), ("OFF", "label"))
+        self.assertEqual(ui.UI.gps_short("GPS on /dev/ttyGPS: can't open (PermissionError)"),
+                         "can't open /dev/ttyGPS")
 
     def test_status_change_beeps_once(self):
         words = {"link": "CHECKING", "gps": "NO FIX"}
@@ -560,13 +442,11 @@ class Cluster(unittest.TestCase):
     """Pieces of the gauge-cluster screen."""
 
     def test_big_digits(self):
-        from wxtui.cluster import digit_rows
+        from ridgewatch.cluster import digit_rows
         rows = digit_rows("1,090", 6)
         self.assertEqual(len(rows), 6)
         self.assertEqual(len(set(len(r) for r in rows)), 1)      # a clean rectangle
         self.assertEqual(digit_rows("8", 4), ["█▀▀▀█", "█▄▄▄█", "█   █", "█▄▄▄█"])
-        ascii_rows = digit_rows("8", 6, uni=False)
-        self.assertTrue(all(set(r) <= set('#"_ ') for r in ascii_rows))
         self.assertEqual(digit_rows("-", 4)[1].strip(), "▄▄▄▄▄")    # unknown: a dash
 
     def test_climb_totals_ignore_gps_jitter(self):
@@ -658,21 +538,11 @@ class Outlook(unittest.TestCase):
 
 
 class Reports(unittest.TestCase):
-    """The single alerts list: official sources and news turned into short reports."""
-
-    def test_headline_to_report(self):
-        r = news.report("Crash closes northbound lanes of US 123 near Clemson")
-        self.assertEqual((r["kind"], r["detail"]), ("CRASH", ["US 123 NB", "lanes closed"]))
-        r = news.report("Man killed in crash on I-85 southbound in Anderson County")
-        self.assertEqual((r["detail"], r["county"]), (["I-85 SB", "fatal"], "Anderson Co"))
-        self.assertEqual(news.report("Tiger Boulevard closed after water main break")["kind"],
-                         "WATER MAIN BREAK")
-        self.assertIsNone(news.report("Library hosts fall book sale"))
+    """The single alerts list: official sources turned into short reports."""
 
     def test_feeds_parse(self):
         f = feeds.parse_fires(fires({"fires": [[34.86, -82.75, "Table Rock", 850.4, 40]]}))
         self.assertEqual((f[0]["name"], f[0]["acres"], f[0]["contained"]), ("Table Rock", 850.4, 40))
-        self.assertEqual(feeds.parse_space(scales({"g": 3})), {"g": 3, "text": "strong"})
         r = feeds.parse_roads(road_events({"roads": [[34.6, -82.7, "I-85", "Northbound", "crash",
                                                        "2 Right Lanes"]]}), "511GA")
         self.assertEqual(len(r), 1)                          # planned roadwork left out
@@ -684,68 +554,13 @@ class Reports(unittest.TestCase):
                         "ends": (now + 3600, -300), "onset": None}]}
         near = [{"event": "Tornado Warning", "severity": "Extreme", "id": "t", "km": 6.4,
                  "ahead": True, "dir": "N", "ends": (now + 1800, -300), "onset": None}]
-        news_items = [{"title": "Crash closes northbound lanes of US 123 near Clemson",
-                       "time": now - 2400, "source": "WYFF4", "also": 2, "km": 3.2,
-                       "place": "Clemson, 2 mi SW"},
-                      {"title": "Library hosts fall book sale", "time": now, "source": "X"}]
         cache = {"fires": {"items": feeds.parse_fires(fires({"fires": [
-                     [34.86, -82.75, "Table Rock", 850, 40], [36.5, -80.0, "Far Away", 10, 0]]}))},
-                 "space": dict(feeds.parse_space(scales({"g": 3})), fetched=now)}
-        rs = views.build_reports(a, near, news_items, cache, 34.68, -82.84, now)
-        self.assertEqual([(r["tier"][0], r["kind"]) for r in rs],
-                         [("o", "WIND ADVISORY"), ("o", "TORNADO WARNING"), ("r", "CRASH"),
-                          ("o", "WILDFIRE"), ("o", "SOLAR STORM")])   # here, ahead, closest...
-        crash = rs[2]
-        self.assertEqual((crash["where"], crash["source"]), ("Clemson, 2 mi SW", "3 reports"))
+            [34.86, -82.75, "Table Rock", 850, 40], [36.5, -80.0, "Far Away", 10, 0]]}))}}
+        rs = views.build_reports(a, near, cache, 34.68, -82.84, now)
+        self.assertEqual([(r["tier"], r["kind"]) for r in rs],
+                         [("official", "WIND ADVISORY"), ("official", "TORNADO WARNING"),
+                          ("official", "WILDFIRE")])            # here, ahead, then closest
         self.assertEqual(rs[1]["where"], "4 mi ahead")
-
-
-class ScreenDriver(unittest.TestCase):
-    class Console(object):
-        def __init__(self):
-            self.keys = []
-
-        def read(self, wait):
-            out, self.keys = self.keys, []
-            return out
-
-    class Out(object):
-        def __init__(self):
-            self.data = []
-
-        def write(self, s):
-            self.data.append(s)
-
-        def flush(self):
-            pass
-
-    def setUp(self):
-        self.con, self.out = self.Console(), self.Out()
-        self.w = screen.Window(self.con, self.out)
-        self.w.timeout(100)
-
-    def key(self, *chars):
-        self.con.keys = list(chars)
-        return self.w.get_wch()
-
-    def test_keys(self):
-        self.assertEqual(self.key("\x1b", "[", "B"), screen.KEY_DOWN)
-        self.assertEqual(self.key("\x1b", "O", "A"), screen.KEY_UP)
-        self.assertEqual(self.key("\x1b", "[", "3", "~"), screen.KEY_DC)
-        self.assertEqual(self.key("\x1b"), "\x1b")
-        self.assertEqual(self.key("\x1b", "q"), "\x1b")
-        self.assertEqual(self.w.get_wch(), "q")              # not swallowed
-        with self.assertRaises(screen.error):
-            self.w.get_wch()                                 # times out
-
-    def test_paint(self):
-        self.w.erase()
-        screen.init_pair(1, 196, -1)
-        self.w.addstr(0, 0, "éx", screen.color_pair(1) | screen.A_BOLD)
-        self.w._paint()
-        out = "".join(self.out.data)
-        self.assertIn("\x1b[0;1;38;5;196m", out)
-        self.assertIn("éx", out)                       # accent stays on its letter
 
 
 class EndToEnd(unittest.TestCase):
@@ -776,7 +591,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("Wind Advisory", text)
         self.assertIn("about 0.24 in", text)
         self.assertIn("Oconee Memorial", text)               # nearest ER, worked out offline
-        self.assertTrue(all(ua.startswith("(weather-tui/") for _, ua in self.fake.log))
+        self.assertTrue(all(ua.startswith("(ridgewatch/") for _, ua in self.fake.log))
         self.fake.mode = {"down": True}                      # lose the connection
         code, text = self.report(loc)
         self.assertEqual(code, 0)
@@ -797,30 +612,27 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(store.notes)
 
 
-@unittest.skipIf(os.name == "nt", "uses a Unix pseudo-terminal")
 class Dashboard(unittest.TestCase):
     """Starts the real full screen in a pseudo-terminal and quits with q."""
 
-    def run_app(self, screen_kind, args, keys=b"", seconds=3.0, size=None):
+    def run_app(self, args, keys=b"", seconds=3.0, size=(47, 156), term="xterm-256color"):
         import pty
         import select
         fake = FakeNWS().start()
         home = tempfile.mkdtemp()
         try:
-            env = dict(os.environ, WEATHER_TUI_API=fake.url, WEATHER_TUI_SCREEN=screen_kind,
-                       WEATHER_TUI_NEWS=fake.url + "/news", WEATHER_TUI_FEEDS=fake.url,
-                       TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+            env = dict(os.environ, RIDGEWATCH_API=fake.url, RIDGEWATCH_FEEDS=fake.url,
+                       TERM=term, LANG="C.UTF-8", LC_ALL="C.UTF-8", PYTHONPATH=ROOT)
             with warnings.catch_warnings():         # the child execs at once: no deadlock risk
                 warnings.simplefilter("ignore", DeprecationWarning)
                 pid, fd = pty.fork()
             if pid == 0:
-                if size:                              # rows, columns
-                    import fcntl
-                    import struct
-                    import termios
-                    fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
-                os.execve(sys.executable, [sys.executable, os.path.join(ROOT, "weather.py"),
-                                           "--home", home] + args, env)
+                import fcntl
+                import struct
+                import termios                        # rows, columns
+                fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
+                os.execve(sys.executable, [sys.executable, "-m", "ridgewatch", "--home", home] + args,
+                          env)
             out, end, sent = b"", time.time() + seconds, False
             while time.time() < end:
                 r, _, _ = select.select([fd], [], [], 0.1)
@@ -856,36 +668,42 @@ class Dashboard(unittest.TestCase):
             fake.stop()
             shutil.rmtree(home, ignore_errors=True)
 
-    def test_gauge_cluster_on_a_big_window(self):
-        for kind in ("curses", "builtin"):
-            code, out, crashed = self.run_app(kind, ["--place", "clemson sc"], size=(47, 156))
-            self.assertEqual((code, crashed), (0, False), kind)
-            for tile in ("SPEED", "GRADE", "ELEV", "HERE", "GRID", "SIGNAL", "ER", "ALERTS",
-                         "WEATHER", "DATA LINK", "GPS"):
-                self.assertIn(" %s " % tile, out, (kind, tile))
-            self.assertIn("Oconee Memorial", out, kind)
+    def test_gauge_cluster(self):
+        code, out, crashed = self.run_app(["--place", "clemson sc"])
+        self.assertEqual((code, crashed), (0, False))
+        for tile in ("SPEED", "GRADE", "ELEV", "HERE", "GRID", "SIGNAL", "ER", "ALERTS",
+                     "WEATHER", "DATA LINK", "GPS", "RIDGEWATCH"):
+            self.assertIn(" %s " % tile, out, tile)
+        self.assertIn("Oconee Memorial", out)
 
-    def test_both_screen_drivers(self):
-        for kind in ("curses", "builtin"):
-            code, out, crashed = self.run_app(kind, ["--place", "clemson sc"], keys=b"a")
-            self.assertEqual((code, crashed), (0, False), kind)
-            self.assertIn("Wind Advisory", out, kind)
-            self.assertIn("CRASH", out, kind)                     # a news report
-            self.assertEqual(self.fake.count("/news?"), 1, kind)  # searched once, not every loop
+    def test_alert_details_screen(self):
+        code, out, crashed = self.run_app(["--place", "clemson sc"], keys=b"a")
+        self.assertEqual((code, crashed), (0, False))
+        self.assertIn("Wind Advisory", out)
+        self.assertIn("LINK ONLINE", out)                    # status tags in the top bar there
 
     def test_day_and_night_looks(self):
-        for kind, look in (("curses", "day"), ("builtin", "night")):
-            code, out, crashed = self.run_app(kind, ["--place", "clemson sc", "--display", look],
-                                              keys=b"d")
-            self.assertEqual((code, crashed), (0, False), (kind, look))
+        for look in ("day", "night"):
+            code, out, crashed = self.run_app(["--place", "clemson sc", "--display", look], keys=b"d")
+            self.assertEqual((code, crashed), (0, False), look)
             self.assertIn("Oconee Memorial", out, look)        # nearest ER
             self.assertIn("display:", out, look)              # d switched the look
-            self.assertIn("reported", out, look)                # news counted as reported
 
-    def test_follow_without_location_sources(self):
-        code, out, crashed = self.run_app("builtin", ["--follow"])
+    def test_follow_with_no_gps(self):
+        code, out, crashed = self.run_app(["--follow"])
         self.assertEqual((code, crashed), (0, False))
         self.assertIn("waiting for", out)
+        self.assertIn("NO GPS", out)
+
+    def test_small_window_asks_for_more_room(self):
+        code, out, crashed = self.run_app(["--place", "clemson sc"], size=(24, 80))
+        self.assertEqual((code, crashed), (0, False))
+        self.assertIn("make the window bigger", out)
+
+    def test_needs_256_colors(self):
+        code, out, crashed = self.run_app(["--place", "clemson sc"], term="vt100", seconds=1.5)
+        self.assertIn("256-color", out)
+        self.assertFalse(crashed)
 
 
 if __name__ == "__main__":

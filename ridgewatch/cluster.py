@@ -1,4 +1,4 @@
-"""The gauge-cluster main screen, for big windows (about 120x36 and up).
+"""The gauge-cluster main screen (needs a window of 120x36 or more).
 
 Every tile has a fixed spot, so your eye learns where things are:
 
@@ -10,14 +10,13 @@ Every tile has a fixed spot, so your eye learns where things are:
                     | GPS
 
 A tile's border color is its warning light. Unknown values show a dim dash and
-the reason, and the tile stays where it is. Smaller windows use the compact
-layout in panels.py.
+the reason, and the tile stays where it is.
 """
 
+import curses
 import time
 
 from . import geo, hospitals, locate, views
-from .term import curses
 
 CLUSTER_MIN_W = 120
 CLUSTER_MIN_H = 34              # rows between the top and bottom bars
@@ -30,15 +29,15 @@ DESCENT_FT = 500                        # this much lost over 2 miles is a long 
 ER_FAR_KM = 48.0                        # nearest ER over ~30 miles: amber
 
 
-def digit_rows(text, rows=6, uni=True):
+def digit_rows(text, rows=6):
     """Big 7-segment digits as `rows` strings of half-block characters.
     6 rows: 8 wide with 2-wide strokes; 4 rows: 5 wide with thin strokes.
-    A 1 is just its stroke; commas are a small block. ASCII terminals get # " _."""
+    A 1 is just its stroke; commas are a small block."""
     wd, sx, sy = (8, 2, 2) if rows >= 6 else (5, 1, 1)
     hp = rows * 2
     mid = (hp - sy) // 2
     out = [""] * rows
-    full, top, bot = ("█", "▀", "▄") if uni else ("#", '"', "_")
+    full, top, bot = "█", "▀", "▄"
     for n, ch in enumerate(text):
         if n:
             out = [r + " " for r in out]
@@ -114,19 +113,13 @@ class Cluster(object):
         self.box_status(y, x + lw, p["weather"], sw)
 
     # ------------------------------------------------------------ helpers --
-    def dash(self):
-        return "—" if self.uni() else "-"
-
-    def uni(self):
-        return self.g.get("dot") != "-"
-
     def big_number(self, y, x, text, spec, rows, maxw):
         """Big digits at (y, x); smaller digits if they'd overflow maxw. Returns the
         column just past them, and the rows actually used."""
         for r in (rows, 4):
             if r > rows:
                 continue
-            lines = digit_rows(text, r, self.uni())
+            lines = digit_rows(text, r)
             if len(lines[0]) <= maxw:
                 for i, line in enumerate(lines):
                     self.put(y + i, x, line, spec)
@@ -162,7 +155,7 @@ class Cluster(object):
             return "follow mode off %s press f" % self.g["dot"]
         if fix is None:
             return "no position yet"
-        return "needs the GPS (Windows location has no speed)"
+        return "needs the GPS"
 
     # ------------------------------------------------------------- gauges --
     def gauge_speed(self, y, x, h, w, drows):
@@ -176,8 +169,7 @@ class Cluster(object):
         if gps:
             num = "%d" % round(fix.speed_mph)
             if fix.course is not None and fix.speed_mph >= 3:
-                arrows = "↑↗→↘↓↙←↖" if self.uni() else ""
-                arrow = (arrows[int((fix.course % 360) / 45 + 0.5) % 8] + " ") if arrows else ""
+                arrow = "↑↗→↘↓↙←↖"[int((fix.course % 360) / 45 + 0.5) % 8] + " "
                 side.append([(arrow + views.compass(fix.course), "title"),
                              (" %d%s" % (round(fix.course) % 360, g["deg"]), "label")])
             elif t and t.get("stopped_at") and fix.speed_mph < 2:
@@ -233,7 +225,7 @@ class Cluster(object):
                 side.append([("level", "value")])
             else:
                 up = gr > 0
-                mark = ("▲ " if up else "▼ ") if self.uni() else ""
+                mark = "▲ " if up else "▼ "
                 side.append([(mark + ("climbing" if up else "descending"),
                               spec if spec != "where" else "value")])
             side.append([])
@@ -245,7 +237,7 @@ class Cluster(object):
         elif gps and fix.mode == 2:
             line2 = [("2D fix: elevation and grade unreliable", "warn")]
         elif not gps:
-            line2 = [(self.no_speed_reason(fix).replace(" (Windows location has no speed)", ""),
+            line2 = [(self.no_speed_reason(fix),
                       "label")]
         elif gr is None:
             line2 = [("needs a few hundred feet of driving", "label")]
@@ -255,21 +247,19 @@ class Cluster(object):
                    side, line1, line2, drows)
 
     def grade_bar(self, gr, width, spec):
-        uni = self.uni()
         track_w = max(10, width - 10)
         if track_w % 2 == 0:
             track_w -= 1
         half = track_w // 2
-        cells = ["━" if uni else "-"] * track_w
-        cells[half] = "┃" if uni else "|"
+        cells = ["━"] * track_w
+        cells[half] = "┃"
         parts = [("-12 ", "label")]
         if gr is None:
             parts.append(("".join(cells), "line"))
         else:
             pos = half + int(round(max(-12.0, min(12.0, gr)) / 12.0 * half))
-            left, right = "".join(cells[:pos]), "".join(cells[pos + 1:])
-            parts += [(left, "line"), ("●" if uni else "o", spec if spec != "where" else "title"),
-                      (right, "line")]
+            parts += [("".join(cells[:pos]), "line"), ("●", spec if spec != "where" else "title"),
+                      ("".join(cells[pos + 1:]), "line")]
         parts.append((" +12", "label"))
         return parts
 
@@ -305,12 +295,11 @@ class Cluster(object):
                           "label")]
         if t and (t["up_m"] or t["down_m"]) and not line2:
             up, dn = t["up_m"] * locate.M_TO_FT, t["down_m"] * locate.M_TO_FT
-            arrow_up, arrow_dn = ("↑ ", "↓ ") if self.uni() else ("up ", "down ")
-            line2 = [("trip: ", "label"), (arrow_up + "{:,} ft".format(int(round(up))), "value"),
+            line2 = [("trip: ", "label"), ("↑ " + "{:,} ft".format(int(round(up))), "value"),
                      (" climbed %s " % g["dot"], "label"),
-                     (arrow_dn + "{:,} ft".format(int(round(dn))), "value"), (" descended", "label")]
+                     ("↓ " + "{:,} ft".format(int(round(dn))), "value"), (" descended", "label")]
         if num is None and not line2:
-            line2 = [(self.no_speed_reason(fix).replace(" (Windows location has no speed)", ""),
+            line2 = [(self.no_speed_reason(fix),
                       "label")]
         self.gauge(y, x, h, w, "ELEV", spec, num, spec if spec != "where" else "title", "ft",
                    [], line1, line2, drows)
@@ -362,7 +351,7 @@ class Cluster(object):
         self.box(y, x, h, w, "GRID", "where")
         vl = self.view_loc()
         if not vl:
-            self.put(y + 1, x + 2, self.dash(), "dim")
+            self.put(y + 1, x + 2, "—", "dim")
             return
         iw = w - 4
         grid = geo.mgrs(vl["lat"], vl["lon"])
@@ -370,7 +359,7 @@ class Cluster(object):
         self.put(y + 2, x + 2, ("%.4f, %.4f" % (vl["lat"], vl["lon"]))[:iw], "value")
         fix = self.fix if self.follow else None
         if fix:
-            src = "GPS" if fix.source == "gps" else "Windows location"
+            src = "GPS"
             acc = locate.fmt_accuracy(fix.acc_m) if fix.acc_m else ""
             text = ("%s %s %s" % (acc, self.g["dot"], src)) if acc else src
         elif self.follow:
@@ -393,7 +382,7 @@ class Cluster(object):
             self.box(y, x, h, w, "ER", "where")
             msg = "loading the hospital list" + self.g["ell"] if vl and not self.hospitals.ready() \
                 else "no hospital within 125 mi" if vl else ""
-            self.put(y + 1, x + 2, (msg or self.dash())[: w - 4], "label" if msg else "dim")
+            self.put(y + 1, x + 2, (msg or "—")[: w - 4], "label" if msg else "dim")
             return
         hosp, dist = val
         km = geo.km_between(vl["lat"], vl["lon"], hosp.lat, hosp.lon)

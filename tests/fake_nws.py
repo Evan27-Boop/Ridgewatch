@@ -1,29 +1,23 @@
 """A stand-in for api.weather.gov, for testing without the internet.
 
 Replies use the same shapes as the real NWS API. Start one with
-FakeNWS().start(); point the app at it with WEATHER_TUI_API=fake.url.
-It also stands in for the Google News search feed at fake.url + "/news"
-(WEATHER_TUI_NEWS).
+FakeNWS().start(); point the app at it with RIDGEWATCH_API=fake.url.
 Change fake.mode while it runs:
   {"down": True}               refuse every request (no connection)
   {"alerts": "none"|"one"|"two"}
   {"warn_north_of": 34.80}     add a Tornado Warning north of that latitude
   {"obs": "stale"}             station reading 5 hours old
   {"dry": True}                no rain in the forecast (the weather box graphs temperature)
-  {"news": "none"}             a news feed with nothing about public safety
   {"storm": [lat, lon, km]}    a Tornado Warning over a square that size around that
                                point (in point alerts inside it, and in area alerts)
-It also fakes the other official feeds (WEATHER_TUI_FEEDS=fake.url):
+It also fakes the other official feeds (RIDGEWATCH_FEEDS=fake.url):
   {"fires": [[lat, lon, "Name", acres, pct_contained], ...]}   /wfigs
-  {"g": 3}                     NOAA geomagnetic storm level today      /swpc
   {"roads": [[lat, lon, "I-85", "Northbound", "crash", "2 Right Lanes"], ...]}
                                                           /511ga and /drivenc
 """
 
 import gzip
 import json
-from email.utils import formatdate
-from xml.sax.saxutils import escape
 import math
 import re
 import threading
@@ -161,32 +155,6 @@ def alerts(mode, lat=0.0, now=None, lon=None):
     return {"features": feats}
 
 
-def rss(mode, now=None):
-    """A Google News style RSS search result."""
-    now = time.time() if now is None else now
-    stories = [
-        (now - 40 * 60, "Crash closes northbound lanes of US 123 near Clemson", "WYFF4"),
-        (now - 3 * 3600, "Clemson Tigers football clinches bowl berth", "The State"),
-        (now - 5 * 3600, "Pickens County deputies search for missing hiker", "Greenville News"),
-        (now - 5 * 3600 - 60, "Pickens County deputies search for missing hiker near trail",
-         "FOX Carolina"),
-        (now - 30 * 3600, "Old: brush fire burns 20 acres", "WSPA"),
-        (now - 2 * 3600, "Man sentenced in 2023 Pickens County shooting", "WYFF4"),
-        (now - 6 * 3600, "Library hosts fall book sale & craft fair", "Pickens Sentinel"),
-    ]
-    if mode.get("news") == "none":
-        stories = stories[1:2] + stories[-1:]
-    items = "".join(
-        "<item><title>%s</title><link>https://news.google.com/rss/articles/x%d</link>"
-        "<guid isPermaLink=\"false\">x%d</guid><pubDate>%s</pubDate>"
-        "<description>&lt;a href=\"#\"&gt;%s&lt;/a&gt;</description>"
-        "<source url=\"https://example.com\">%s</source></item>"
-        % (escape(t + " - " + src), i, i, formatdate(ts, usegmt=True), escape(escape(t)),
-           escape(src)) for i, (ts, t, src) in enumerate(stories))
-    return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><rss version="2.0">'
-            "<channel><title>search - Google News</title>%s</channel></rss>" % items).encode()
-
-
 def fires(mode, now=None):
     now = time.time() if now is None else now
     feats = []
@@ -197,14 +165,6 @@ def fires(mode, now=None):
                                      "FireDiscoveryDateTime": int((now - 2 * 86400) * 1000),
                                      "UniqueFireIdentifier": "2026-SC-%d" % i}})
     return {"type": "FeatureCollection", "features": feats}
-
-
-def scales(mode):
-    g = int(mode.get("g", 0))
-    text = {0: "none", 1: "minor", 2: "moderate", 3: "strong", 4: "severe", 5: "extreme"}[g]
-    day = {"DateStamp": "2026-11-06", "G": {"Scale": str(g), "Text": text},
-           "R": {"Scale": "0", "Text": "none"}, "S": {"Scale": "0", "Text": "none"}}
-    return {"-1": day, "0": day, "1": dict(day, G={"Scale": None, "Text": None})}
 
 
 def road_events(mode, now=None):
@@ -267,20 +227,10 @@ class FakeNWS(object):
                     return self.reply(200, obs(mm.group(1), m))
                 if path.startswith("/wfigs?"):
                     return self.reply(200, fires(m))
-                if path.startswith("/swpc"):
-                    return self.reply(200, scales(m))
                 if path.startswith(("/511ga?", "/drivenc?")):
                     if "key=" not in path:
                         return self.reply(401, {"error": "key required"})
                     return self.reply(200, road_events(m))
-                if path.startswith("/news?"):
-                    body = rss(m)
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/rss+xml; charset=utf-8")
-                    self.send_header("Content-Length", str(len(body)))
-                    self.end_headers()
-                    self.wfile.write(body)
-                    return
                 if path.startswith("/alerts/active?point="):
                     lat, lon = (float(v) for v in path.split("=")[1].split(","))
                     return self.reply(200, alerts(m, lat, lon=lon))

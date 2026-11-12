@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.0 (2026-11-12): Ridgewatch
+
+weather-tui becomes Ridgewatch, with a written spec (`SPEC.md`) and git history.
+
+- **Renamed** to Ridgewatch: the top bar, the `./rw` launcher, the `ridgewatch` package,
+  `~/.config/ridgewatch`, and `RIDGEWATCH_*` test variables.
+- **Linux only.** Removed Windows support: the built-in screen driver, COM ports,
+  Windows location, `weather.cmd`.
+- **One layout.** The gauge cluster is the only main screen; it needs 120×36.
+  Removed the compact layouts.
+- **Modern terminals only.** Removed ASCII mode and the 16-color and mono modes; the app
+  says so and stops if the terminal can't do 256 colors or UTF-8.
+- **Removed feeds:** the Google News scraper and space weather. Wildfires and 511 roads stay.
+- `/dev/ttyGPS` is checked first when looking for the GPS.
+
 ## 2.5.0 (2026-11-10)
 
 - **Gauge-cluster layout** for big windows (120×36 and up, e.g. a maximized laptop

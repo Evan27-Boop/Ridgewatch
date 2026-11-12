@@ -20,7 +20,7 @@ from datetime import datetime
 from . import __version__, geo
 from .settings import loc_key
 
-API = os.environ.get("WEATHER_TUI_API", "https://api.weather.gov").rstrip("/")
+API = os.environ.get("RIDGEWATCH_API", "https://api.weather.gov").rstrip("/")
 
 POINTS_MAX_AGE = 7 * 86400      # re-check the location's forecast grid weekly
 QPF_REUSE_SEC = 3600            # the rain-total download is the biggest: reuse it for an hour
@@ -41,7 +41,7 @@ class FetchError(Exception):
 def user_agent(contact=""):
     # NWS asks every app to identify itself. No personal info unless you add it.
     who = (contact or "").strip() or "personal weather app"
-    return "(weather-tui/%s, %s)" % (__version__, who)
+    return "(ridgewatch/%s, %s)" % (__version__, who)
 
 
 def fetch_url(url, ua, parse, accept="application/geo+json", who="NWS",

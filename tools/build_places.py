@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rebuild weather-tui's offline town/ZIP list from official Census files.
+"""Rebuild ridgewatch's offline town/ZIP list from official Census files.
 
 You only need this if you want to refresh the list. The app already ships
-with one (wxtui/places.tsv.gz).
+with one (ridgewatch/places.tsv.gz).
 
 1. Download two "Gazetteer" files from the Census Bureau (any recent year):
      https://www.census.gov/geographies/reference-files/time-series/geo/gazetteer-files.html
@@ -14,7 +14,7 @@ with one (wxtui/places.tsv.gz).
      python tools/build_places.py --places 2024_Gaz_place_national.txt \
                                   --zcta   2024_Gaz_zcta_national.txt
 
-It writes wxtui/places.tsv.gz (a backup of the old one is kept as .bak).
+It writes ridgewatch/places.tsv.gz (a backup of the old one is kept as .bak).
 Standard library only.
 """
 
@@ -32,7 +32,7 @@ LSAD_SUFFIXES = [
     "zona urbana", "borough", "village", "city", "town", "CDP",
 ]
 
-HEADER = "#weather-tui places v1"
+HEADER = "#ridgewatch places v1"
 
 
 def clean_place_name(raw):
@@ -160,7 +160,7 @@ def write_places(places, zips, out_path, source_note):
 
 def main(argv=None):
     here = os.path.dirname(os.path.abspath(__file__))
-    default_out = os.path.join(here, "..", "wxtui", "places.tsv.gz")
+    default_out = os.path.join(here, "..", "ridgewatch", "places.tsv.gz")
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--places", required=True, help="Census *_Gaz_place_national.txt")

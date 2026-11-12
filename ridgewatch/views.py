@@ -6,7 +6,7 @@ urgent enough to flash. No drawing here. Standard library only.
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import feeds, geo, news
+from . import feeds, geo
 from .geo import compass  # noqa: F401  (re-exported for the screens)
 from .nws import OBS_FRESH
 
@@ -291,16 +291,6 @@ def is_urgent(item):
     return ev.endswith(("Warning", "Emergency")) or ev in URGENT_EVENTS
 
 
-def view_news(nentry, now=None):
-    """Nearby headlines for one area, as cached by the dashboard."""
-    now = time.time() if now is None else now
-    e = nentry or {}
-    fetched = e.get("fetched")
-    return {"items": news.current(e, now), "known": bool(fetched),
-            "age": (now - fetched) if fetched else None, "error": e.get("err"),
-            "label": e.get("label") or "", "now": now}
-
-
 def new_urgent(entry, items):
     """Urgent alerts you haven't been told about; remembers everything seen.
 
@@ -326,32 +316,20 @@ def new_urgent(entry, items):
 
 # ------------------------------------------------------- the alerts list --
 # One list for everything worth knowing nearby. Each line is a short report:
-#   tier     "official" (an agency said so; only these can ever beep) or
-#            "reported" (news; never beeps)
+#   tier     "official" (an agency said so). Radio calls will be "heard".
 #   kind     WIND ADVISORY, WILDFIRE, CRASH...
 #   detail   ["US 123 NB", "lanes closed"]
 #   where    "here", "4 mi ahead", "12 mi N", "Clemson, 2 mi SW", "Pickens Co"
 #   when     "until 4:15 PM", "40m"
-#   source   "NWS", "NIFC", "511GA", "NOAA", "3 reports"
+#   source   "NWS", "NIFC", "511GA"
 # Order: official alerts over you, then storm warnings (ahead first), then
-# everything else closest first, then things with no distance (nationwide,
-# county-wide).
-
-NEWS_CATS = {"CRASH": "road", "PEDESTRIAN STRUCK": "road", "TRAIN INCIDENT": "road",
-             "ROAD CLOSED": "road", "TRAFFIC": "road", "BRUSH FIRE": "fire",
-             "STRUCTURE FIRE": "fire", "FIRE": "fire", "EXPLOSION": "fire", "HAZMAT": "fire",
-             "EVACUATION": "fire", "MISSING PERSON": "missing", "AMBER ALERT": "missing",
-             "SILVER ALERT": "missing", "ABDUCTION": "missing", "MANHUNT": "missing",
-             "POWER OUTAGE": "utility", "BOIL WATER NOTICE": "utility",
-             "WATER MAIN BREAK": "utility", "FLOODING": "storm", "STORM DAMAGE": "storm",
-             "SLIDE": "storm", "SINKHOLE": "storm"}
-
+# everything else closest first.
 
 def _mi(km):
     return max(1, int(round(km / 1.609344)))
 
 
-def build_reports(a, nearby, news_items, feed_cache, lat, lon, now=None):
+def build_reports(a, nearby, feed_cache, lat, lon, now=None):
     now = time.time() if now is None else now
     out = []
     for it in a.get("items") or []:                            # NWS, over you
@@ -390,26 +368,6 @@ def build_reports(a, nearby, news_items, feed_cache, lat, lon, now=None):
                         "detail": it["detail"], "where": "%d mi %s" % (_mi(it["km"]), it["dir"]),
                         "when": when, "source": it["source"], "km": it["km"], "rank": 2,
                         "id": it["id"], "item": it})
-    space = fc.get("space") or {}
-    if space.get("g", 0) >= feeds.GPS_STORM and now - space.get("fetched", 0) < 6 * 3600:
-        out.append({"tier": "official", "kind": "SOLAR STORM", "sev": None, "cat": "space",
-                    "detail": ["G%d %s" % (space["g"], space.get("text") or ""),
-                               "GPS may be less accurate"],
-                    "where": "nationwide", "when": "", "source": "NOAA", "km": None,
-                    "rank": 3, "id": "space-g%d" % space["g"], "item": space})
-    for it in news_items or []:                                 # news, as reports
-        r = news.report(it["title"])
-        if not r:
-            continue
-        where = it.get("place") or r["county"]
-        if not where and not r["road"]:
-            continue                                            # no "where": not a report
-        n = 1 + (it.get("also") or 0)
-        out.append({"tier": "reported", "kind": r["kind"], "sev": None,
-                    "cat": NEWS_CATS.get(r["kind"], "police"), "detail": r["detail"],
-                    "where": where, "when": fmt_age(now - it["time"]).replace("just now", "now"),
-                    "source": "%d report%s" % (n, "s" if n > 1 else ""), "km": it.get("km"),
-                    "rank": 2 if it.get("km") is not None else 4, "id": it["title"], "item": it})
     out.sort(key=lambda r: (r["rank"], r["km"] if r["km"] is not None else 0,
                             0 if r["tier"] == "official" else 1))
     return out

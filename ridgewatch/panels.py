@@ -3,53 +3,45 @@ location, rain graph, picker, alert text). Mixed into the UI class in ui.py;
 it reads the app's state but never changes it.
 """
 
+import curses
 import re
 import textwrap
 import time
 
 from . import __version__, geo, hospitals, locate, sun, theme, views
 from . import places as places_mod
-from .cluster import Cluster
-from .term import curses
+from .cluster import CLUSTER_MIN_H, CLUSTER_MIN_W, Cluster
 
 UNI = {
     "h": "─", "v": "│", "tl": "┌", "tr": "┐", "bl": "└", "br": "┘",
     "bars": " ▁▂▃▄▅▆▇█", "base": "▁", "deg": "°", "dot": "·", "tri": "▲",
     "sel": "›", "ell": "…", "spin": "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏", "approx": "≈", "updown": "↑↓",
 }
-ASCII = {
-    "h": "-", "v": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+",
-    "bars": " ..::++##", "base": "_", "deg": "", "dot": "-", "tri": "!",
-    "sel": ">", "ell": "...", "spin": "|/-\\", "approx": "~", "updown": "up/dn",
-}
-
-# name: (256-color, 16-color, extra attributes)
+# name: (256-color number, extra attributes)
 THEME = {
-    "line": (239, 8, "dim"),
-    "title": (231, 15, "bold"),
-    "label": (245, 7, "dim"),
-    "value": (253, 15, ""),
-    "dim": (242, 8, "dim"),
-    "hot": (167, 9, "bold"),
-    "loc": (179, 11, "bold"),
-    "now": (65, 2, ""),
-    "alerts": (131, 1, ""),
-    "precip": (61, 4, ""),
-    "pick": (137, 3, ""),
-    "where": (73, 6, ""),
-    "ok": (108, 10, ""),
-    "warn": (214, 11, "bold"),
-    "err": (203, 9, "bold"),
+    "line": (239, "dim"),
+    "title": (231, "bold"),
+    "label": (245, "dim"),
+    "value": (253, ""),
+    "dim": (242, "dim"),
+    "hot": (167, "bold"),
+    "loc": (179, "bold"),
+    "now": (65, ""),
+    "alerts": (131, ""),
+    "precip": (61, ""),
+    "pick": (137, ""),
+    "where": (73, ""),
+    "ok": (108, ""),
+    "warn": (214, "bold"),
+    "err": (203, "bold"),
 }
 
 TEMP_256 = [(-100, 93), (10, 99), (25, 63), (33, 69), (40, 75), (50, 79), (60, 114),
             (70, 148), (78, 184), (85, 214), (92, 208), (100, 196)]
-TEMP_16 = [(-100, 12), (33, 14), (50, 10), (65, 11), (80, 3), (90, 9)]
 POP_256 = [(0, 60), (20, 67), (30, 68), (40, 74), (50, 39), (60, 33), (70, 27),
            (80, 63), (90, 99)]
-POP_16 = [(0, 4), (30, 12), (60, 14)]
-SEVERITY = {"Extreme": (201, 13, "bold"), "Severe": (196, 9, "bold"),
-            "Moderate": (208, 11, "bold"), "Minor": (220, 11, "")}
+SEVERITY = {"Extreme": (201, "bold"), "Severe": (196, "bold"),
+            "Moderate": (208, "bold"), "Minor": (220, "")}
 
 
 TEMP_SCALE = (20, 100)          # the temperature graph's bottom and top, never rescaled
@@ -79,62 +71,50 @@ def _stop(stops, v):
 def temp_spec(f, bold=True):
     if f is None:
         return THEME["value"]
-    return (_stop(TEMP_256, f), _stop(TEMP_16, f), "bold" if bold else "")
+    return (_stop(TEMP_256, f), "bold" if bold else "")
 
 
 def pop_spec(p):
-    return (_stop(POP_256, p), _stop(POP_16, p), "bold" if p >= 60 else "")
+    return (_stop(POP_256, p), "bold" if p >= 60 else "")
 
 
 def sev_spec(sev):
-    return SEVERITY.get(sev, (250, 7, "bold"))
+    return SEVERITY.get(sev, (250, "bold"))
+
+
+class NeedsColors(Exception):
+    """The terminal can't show 256 colors."""
 
 
 class Palette(object):
-    """Picks 256, 16 or 8 colors (or none) depending on the terminal, in the
-    normal, day (high contrast) or night (dim) look."""
+    """256 colors, in the normal, day (high contrast) or night (dim) look."""
 
-    def __init__(self, want="auto"):
-        self.n = 0
+    def __init__(self):
         self.pairs = {}
-        self.default_bg = -1
-        self.bg = -1
         self.mode = "normal"
-        self.max_pairs = 0
-        if want == "mono" or not curses.has_colors():
-            return
         try:
             curses.start_color()
-        except curses.error:
-            return
-        try:
             curses.use_default_colors()
         except curses.error:
-            self.default_bg = self.bg = curses.COLOR_BLACK
-        colors = getattr(curses, "COLORS", 8)
-        self.n = 256 if colors >= 256 else 16 if colors >= 16 else 8
-        if want in ("16", "8"):
-            self.n = min(self.n, int(want))
-        self.max_pairs = getattr(curses, "COLOR_PAIRS", 64)
+            raise NeedsColors()
+        if getattr(curses, "COLORS", 0) < 256:
+            raise NeedsColors()
+        self.default_bg = self.bg = -1
+        self.max_pairs = getattr(curses, "COLOR_PAIRS", 256)
 
     def set_mode(self, mode):
         """'normal', 'day' or 'night'. Returns True if the look changed."""
-        if mode == self.mode or self.n == 0:
+        if mode == self.mode:
             return False
         self.mode = mode
         bg = theme.background(mode)
-        if bg is None:
-            self.bg = self.default_bg
-        else:
-            self.bg = bg[0] if self.n >= 256 else bg[1] if self.n >= 16 else bg[1] % 8
+        self.bg = self.default_bg if bg is None else bg
         self.pairs = {}                    # pair numbers get reused with the new background
         return True
 
     def base(self):
         """Attribute for empty space: paints the background in day and night looks."""
-        if self.n == 0 or self.mode == "normal":
-            return 0
-        return self(THEME["value"])
+        return 0 if self.mode == "normal" else self(THEME["value"])
 
     def _pair(self, fg):
         if fg in self.pairs:
@@ -152,26 +132,14 @@ class Palette(object):
     def __call__(self, spec):
         if isinstance(spec, str):
             spec = THEME[spec]
-        c256, c16, flags = theme.adapt(spec, self.mode)
-        a = curses.A_BOLD if "bold" in flags else 0
-        if self.n == 0:
-            return a | (curses.A_DIM if "dim" in flags else 0)
-        if self.n >= 256:
-            fg = c256
-        elif self.n >= 16:
-            fg = c16
-        else:
-            fg = c16 % 8
-            if c16 == 8:
-                fg, a = 7, a | curses.A_DIM
-            elif c16 > 8:
-                a |= curses.A_BOLD
-        return a | self._pair(fg)
+        color, flags = theme.adapt(spec, self.mode)
+        a = (curses.A_BOLD if "bold" in flags else 0) | (curses.A_DIM if "dim" in flags else 0)
+        return a | self._pair(color)
 
 
 class Panels(Cluster):
-    """Drawing methods for UI (see ui.py). Big windows get the gauge cluster
-    (cluster.py); smaller ones the compact layout below."""
+    """Drawing methods for UI (see ui.py): the frame, the weather and status boxes,
+    and the detail screens. The gauge-cluster main screen is in cluster.py."""
 
     def put(self, y, x, text, spec="value", extra=0):
         h, w = self.scr.getmaxyx()
@@ -227,9 +195,9 @@ class Panels(Cluster):
             pass
         self.scr.erase()
         H, W = self.scr.getmaxyx()
-        min_h = 14
-        if W < 40 or H < min_h:
-            text = "make the window bigger (40x%d)" % min_h
+        if not self.cluster_fits(H - 2, W):
+            text = "make the window bigger: %dx%d needed, this is %dx%d" % (
+                CLUSTER_MIN_W, CLUSTER_MIN_H + 2, W, H)
             self.put(H // 2, max(0, (W - len(text)) // 2), text, "warn")
             self.scr.noutrefresh()
             curses.doupdate()
@@ -254,14 +222,10 @@ class Panels(Cluster):
     def draw_header(self, W, entry):
         g = self.g
         self.put(0, 0, g["h"] * W, "line")
-        H = self.scr.getmaxyx()[0]
-        if self.status_on_screen(H, W):
-            x = self.put(0, 2, " weather ", "title")
-            if W >= 70:
-                x = self.put(0, x, __version__ + " ", "dim")
-        else:
-            # no DATA LINK / GPS boxes on this screen: show both as colored tags instead
-            x = 2
+        x = self.put(0, 2, " RIDGEWATCH ", "title")
+        x = self.put(0, x, __version__ + " ", "dim")
+        if self.mode != "main":
+            # the status boxes aren't on this screen: show both as colored tags instead
             for lab, (word, spec, _) in (("LINK", self.link_state()), ("GPS", self.gps_state())):
                 x = self.put(0, x, " %s %s " % (lab, word), spec, curses.A_REVERSE | curses.A_BOLD) + 1
         right_end = W - 2
@@ -380,49 +344,13 @@ class Panels(Cluster):
 
     # main screen --------------------------------------------------------
     def draw_main(self, y, x, h, w, entry):
-        """Big windows: the gauge cluster (cluster.py). Smaller ones: weather strip on
-        top, alerts in the middle, location at the bottom."""
+        """The gauge cluster (cluster.py), or a prompt when no place is picked yet."""
         if not self.view_loc() and not self.follow:
-            self.box(y, x, h, w, "weather", "line")
+            self.box(y, x, h, w, "RIDGEWATCH", "line")
             self.put(y + 2, x + 3, "No location yet. Press l to pick one, or f to follow", "value")
-            self.put(y + 3, x + 3, "your live location.", "value")
+            self.put(y + 3, x + 3, "your GPS.", "value")
             return
-        if self.cluster_fits(h, w):
-            self.draw_cluster(y, x, h, w, entry)
-            return
-        # weather gets a graph when there's room; alerts and location split the rest evenly
-        wh = self.weather_h(h)
-        rest = h - wh
-        ah = rest // 2
-        if self.status_side(w, wh):
-            sw = max(22, w // 3)
-            self.box_weather(y, x, wh, w - sw, entry)
-            self.box_status(y, x + w - sw, wh, sw)
-        else:
-            self.box_weather(y, x, wh, w, entry)
-        self.box_alerts(y + wh, x, ah, w, entry)
-        self.box_location(y + wh + ah, x, rest - ah, w)
-
-    @staticmethod
-    def weather_h(h):
-        return 8 if h >= 22 else 7 if h >= 20 else 6 if h >= 18 else 5 if h >= 16 else \
-            4 if h >= 13 else 3
-
-    def status_on_screen(self, H, W):
-        """Are the DATA LINK and GPS boxes on screen (so the top bar needn't repeat them)?"""
-        if self.mode != "main" or (not self.view_loc() and not self.follow):
-            return False
-        return self.cluster_fits(H - 2, W) or self.status_side(W, self.weather_h(H - 2))
-
-    def status_side(self, w, wh):
-        """DATA LINK and GPS get their own boxes beside the weather when there's room;
-        otherwise they're badges in the top bar."""
-        return w >= 70 and wh >= 4
-
-    def badge(self, y, x, w, word, spec):
-        """A solid colored bar with the word in the middle: readable from the driver's seat."""
-        text = word.center(max(len(word) + 2, w))[:w]
-        self.put(y, x, text, spec, curses.A_REVERSE | curses.A_BOLD)
+        self.draw_cluster(y, x, h, w, entry)
 
     def box_status(self, y, x, h, w):
         """DATA LINK (internet) and GPS, each a big colored badge plus one line of detail."""
@@ -445,39 +373,30 @@ class Panels(Cluster):
             if len(sep.join(bits)) > w - 4:       # narrow: drop the word, keep the numbers
                 bits = [b.replace(" " + word, "") for b in bits]
             gdetail = sep.join(bits)
-        hint = {"ROUGH": "plug in the GPS for a 3D FIX", "NO FIX": "needs a clear view of the sky",
+        hint = {"NO FIX": "needs a clear view of the sky",
                 "NO GPS": "plug in the GPS (or check the cable)",
                 "2D FIX": "too few satellites for elevation"}.get(gps[0], "")
         boxes = [("DATA LINK", link[0], link[1], link[2], "label", "", ""),
                  ("GPS", gps[0], gps[1], gdetail or "", gspec2,
                   self.gps_port() if self.follow else "", hint)]
-        if h >= 6:
-            h1 = h // 2
-            for (title, word, spec, detail, dspec, right, more), (by, bh) in zip(
-                    boxes, ((y, h1), (y + h1, h - h1))):
-                self.box(by, x, bh, w, title, spec, right, "dim")
-                iw = w - 4
-                rows = 3 if bh >= 7 else 1          # big screens: a 3-row block of color
-                if bh >= 3:
-                    self.big_badge(by + 1, x + 2, iw, rows, word, spec)
-                if bh >= rows + 3:
-                    self.put(by + 1 + rows, x + 2, detail[:iw], dspec)
-                if bh >= rows + 4 and more:
-                    self.put(by + 2 + rows, x + 2, more[:iw], "label")
-        else:                                     # short screen: one box, two badge rows
-            self.box(y, x, h, w, "status", "line")
+        h1 = h // 2
+        for (title, word, spec, detail, dspec, right, more), (by, bh) in zip(
+                boxes, ((y, h1), (y + h1, h - h1))):
+            self.box(by, x, bh, w, title, spec, right, "dim")
             iw = w - 4
-            for i, (title, word, spec, _, _, _, _) in enumerate(boxes[: max(0, h - 2)]):
-                lab = "LINK" if title == "DATA LINK" else "GPS"
-                self.put(y + 1 + i, x + 2, lab.ljust(5), "label")
-                self.badge(y + 1 + i, x + 7, iw - 5, word, spec)
+            rows = 3 if bh >= 7 else 1              # tall enough: a 3-row block of color
+            self.big_badge(by + 1, x + 2, iw, rows, word, spec)
+            if bh >= rows + 3:
+                self.put(by + 1 + rows, x + 2, detail[:iw], dspec)
+            if bh >= rows + 4 and more:
+                self.put(by + 2 + rows, x + 2, more[:iw], "label")
 
     def gps_port(self):
-        """'COM3' or '/dev/ttyACM0' while a GPS receiver is talking, else ''."""
+        """'/dev/ttyACM0' while a GPS receiver is talking, else ''."""
         g = self.locator.gps if self.locator else None
         return (g.port or "") if g else ""
 
-    def box_weather(self, y, x, h, w, entry, title="weather", spacer=False):
+    def box_weather(self, y, x, h, w, entry, title="WEATHER", spacer=False):
         """What it's like now, what's coming (rain, highs and lows, daylight), and a
         24-hour graph: chance of rain when rain is likely, otherwise temperature.
         When the station's reading is old, this hour's forecast stands in (and the
@@ -659,9 +578,6 @@ class Panels(Cluster):
         return [("nearest hospital ", "label"), (dist, "value"), (where, "label"),
                 (" (ER not listed)", "warn")]
 
-    # location ----------------------------------------------------------
-    LABEL_W = 7
-
     def gps_strength(self, fix):
         """(bars 1-5, word) from the GPS's own accuracy estimate (or satellite count)."""
         acc, sats = fix.acc_m, fix.sats or 0
@@ -671,154 +587,8 @@ class Panels(Cluster):
             n = 4 if sats >= 9 else 3 if sats >= 6 else 2 if sats >= 4 else 1
         return n, ("excellent", "poor", "fair", "fair", "good", "excellent")[n]
 
-    def box_location(self, y, x, h, w):
-        """Where you are, laid out as labeled rows that never move around:
-            HERE   1.1 mi SSW of Central, SC · Pickens Co
-            SPEED  64 mph  ↑ N  · climbing 5%
-            ELEV   853 ft  ▂▃▅▆▇▆▅▃  last 5 mi 640-1,210 ft
-            AHEAD  Norris 4 mi ~4 min · Liberty 9 mi ~8 min
-            ER     ≈11 mi W · Oconee Memorial Hospital, Seneca
-            TRIP   34.2 mi · 41 min moving · top 66 · start 14 mi SE
-            GRID   17S LU 3698 4208   34.7078, -82.7800
-        On a short window the least useful rows are left out (the rest keep their order).
-        GPS signal has its own box now, so it isn't repeated here."""
-        fix = self.fix if self.follow else None
-        right, rspec = ("following", "label") if self.follow else ("manual", "dim")
-        self.box(y, x, h, w, "location", "where", right, rspec)
-        iy, ix, ih, iw = y + 1, x + 2, h - 2, w - 4
-        if ih < 1:
-            return
-        rows = self.location_rows(fix)
-        keep = sorted(range(len(rows)), key=lambda i: rows[i][0])[:ih]
-        lw = self.LABEL_W if iw >= 50 else 0
-        for row, i in enumerate(sorted(keep)):
-            _, label, parts, rtext = rows[i]
-            if lw:
-                self.put(iy + row, ix, label.ljust(lw)[:lw], "label")
-            elif label in ("ER", "AHEAD", "TRIP", "ELEV"):
-                parts = [(label.lower() if label != "ER" else "ER", "label"), (" ", "label")] + parts
-            used = sum(len(p[0]) for p in parts)
-            room = iw - lw
-            if rtext and used + len(rtext) + 3 <= room:
-                self.put(iy + row, ix + iw - len(rtext), rtext, "dim")
-                room -= len(rtext) + 2
-            self.runs(iy + row, ix + lw, parts, room)
-
     def bar_text(self, n):
-        on, off = ("▮", "▯") if self.g is UNI else ("#", "-")
-        return on * n + off * (5 - n)
-
-    def location_rows(self, fix):
-        """[(priority, label, parts, right_text)] in display order; lower priority
-        numbers stay longest when the box is short."""
-        g = self.g
-        dot = " %s " % g["dot"]
-        vl = self.view_loc()
-        rows = []
-        if not vl:
-            rows.append((0, "HERE", [("waiting for a location" + g["ell"], "warn")], ""))
-            status = dot.join(self.locator.describe()) if self.locator else ""
-            if status:
-                rows.append((1, "GPS", [(status, "warn")], ""))
-            return rows
-        place, county = self.place_label(vl["lat"], vl["lon"])
-        lost = self.follow and not fix
-        here = [(("last known: " if lost else "") + place, "warn" if lost else "loc")]
-        if county:
-            here.append((dot + county, "value"))
-        if self.follow and self.entered and time.time() - self.entered[1] < 600:
-            here.append(("  entered %s" % views.ago(time.time() - self.entered[1]), "hot"))
-        rows.append((0, "HERE", here, ""))
-
-        gps = fix is not None and fix.source == "gps"
-        terrain = self.terrain() if gps else None
-        t = self.trip if self.follow else None
-        if self.follow:
-            if gps and fix.speed_mph is not None:
-                stopped = t and t.get("stopped_at")
-                if stopped and fix.speed_mph < 2:
-                    speed = [("stopped", "title"), (" %s" % views.ago(time.time() - stopped)
-                                                    .replace(" ago", ""), "label")]
-                else:
-                    speed = [("%d" % round(fix.speed_mph), "title"), (" mph  ", "label")]
-                    if fix.course is not None:
-                        arrows = "↑↗→↘↓↙←↖" if g is UNI else ""
-                        arrow = (arrows[int((fix.course % 360) / 45 + 0.5) % 8] + " ") if arrows else ""
-                        speed += [(arrow + views.compass(fix.course), "title"),
-                                  (" %d%s" % (round(fix.course) % 360, g["deg"]), "label")]
-                    gr = terrain and terrain["grade"]
-                    if gr is not None:
-                        if abs(gr) < 2:
-                            speed.append((dot + "level", "label"))
-                        else:
-                            speed.append((dot + ("climbing" if gr > 0 else "descending") +
-                                          " %d%%" % round(abs(gr)), "warn" if abs(gr) >= 6 else "value"))
-                rows.append((1, "SPEED", speed, ""))
-            elif fix:
-                rows.append((6, "SPEED", [("needs the GPS (Windows location has no speed)", "dim")], ""))
-        if terrain:
-            elev = [("{:,} ft".format(int(round(terrain["alt_ft"]))), "value")]
-            spark = terrain["spark"]
-            if len(spark) >= 8 and terrain["span_km"] >= 1.0:
-                elev.append(("  " + self.sparkline([ft for _, ft in spark], 16), "now"))
-                lo, hi = min(ft for _, ft in spark), max(ft for _, ft in spark)
-                elev.append(("  last %d mi %s-%s ft" % (max(1, round(terrain["span_km"] / 1.609)),
-                                                       "{:,}".format(int(lo)), "{:,}".format(int(hi))),
-                             "label"))
-            if terrain["drop_ft"] is not None and terrain["drop_ft"] >= 500:
-                elev.append((dot + "long descent -%s ft in 2 mi" % "{:,}".format(int(terrain["drop_ft"])),
-                             "warn"))
-            rows.append((4, "ELEV", elev, ""))
-        elif gps and fix.alt_m is not None:
-            rows.append((4, "ELEV", [("{:,} ft".format(int(round(fix.alt_m * locate.M_TO_FT))),
-                                      "value")], ""))
-        elif not self.follow:
-            elev = (self.store.entry(vl).get("hourly") or {}).get("elev_ft")
-            if elev is not None:
-                rows.append((3, "ELEV", [("{:,} ft".format(elev), "value"),
-                                         ("  forecast area", "dim")], ""))
-        towns = self.towns_ahead() if gps else []
-        if towns:
-            spd = fix.speed_mph or 0
-            parts = []
-            for i, (name, km) in enumerate(towns):
-                mi = km / 1.609344
-                parts += [(dot if i else "", "label"), (name, "value"),
-                          (" %d mi" % max(1, round(mi)), "label")]
-                if spd >= 10:
-                    parts.append((" ~%d min" % max(1, round(mi / spd * 60)), "label"))
-            rows.append((2, "AHEAD", parts, ""))
-        er = self.er_parts(vl["lat"], vl["lon"])
-        if er:
-            rows.append((3 if self.follow else 1, "ER", er[1:] if er[0][0].startswith("nearest ER")
-                         else er, ""))
-        if t and t.get("start") and (t["km"] >= 0.1 or t["moving"] >= 60):
-            mi = t["km"] / 1.609344
-            trip = [("%.1f mi" % mi, "value")]
-            if t["moving"] >= 60:
-                m = int(t["moving"] // 60)
-                trip += [(dot + (("%dh %02dm" % (m // 60, m % 60)) if m >= 60 else "%d min" % m),
-                          "value"), (" moving", "label")]
-            if t["top"] >= 3:
-                trip += [(dot + "top ", "label"), ("%d" % round(t["top"]), "value")]
-            s_lat, s_lon, _ = t["start"]
-            km = geo.km_between(vl["lat"], vl["lon"], s_lat, s_lon)
-            if km >= 0.8:
-                trip += [(dot + "start ", "label"), ("%d mi %s" % (
-                    max(1, round(km / 1.609344)),
-                    geo.compass(geo.bearing(vl["lat"], vl["lon"], s_lat, s_lon))), "value")]
-            rows.append((5, "TRIP", trip, ""))
-        grid = geo.mgrs(vl["lat"], vl["lon"])
-        H, W = self.scr.getmaxyx()
-        # the port is in the GPS box's title; repeat it here only when that box isn't shown
-        port = self.gps_port() if gps and not self.status_on_screen(H, W) else ""
-        rows.append((6 if self.follow else 2, "GRID",
-                     ([(grid, "title")] if grid else []) +
-                     [("   %.4f, %.4f" % (vl["lat"], vl["lon"]), "label")], port))
-        if not self.follow:
-            rows.append((4, "", [("press ", "label"), ("f", "hot"),
-                                 (" for live GPS: speed, grade, towns ahead, trip", "label")], ""))
-        return rows
+        return "▮" * n + "▯" * (5 - n)
 
     def sparkline(self, values, width):
         """Values squeezed into `width` block characters, low to high."""
@@ -831,37 +601,6 @@ class Panels(Cluster):
         span = (hi - lo) or 1.0
         return "".join(bars[1 + int((v - lo) / span * 7)] for v in cols)
 
-    def box_alerts(self, y, x, h, w, entry):
-        """One list: official alerts (▲) and news reports (●), see views.build_reports."""
-        a = views.view_alerts(entry)
-        reports = self.reports
-        off = sum(1 for r in reports if r["tier"] == "official")
-        rep_n = len(reports) - off
-        bits = (["%d official" % off] if off else []) + (["%d reported" % rep_n] if rep_n else [])
-        right = (" %s " % self.g["dot"]).join(bits) or ("none" if a["known"] else None)
-        first = next((r for r in reports if r["sev"]), None)
-        rspec = sev_spec(first["sev"]) if first else ("label" if bits else "dim")
-        if a["known"] and not a["trusted"]:
-            right, rspec = "out of date", "warn"
-        flash_on = self.alarm_on() and int(time.time() * 2) % 2 == 0
-        border = sev_spec(self.alarm_items[0]["severity"]) if flash_on else \
-            "warn" if a["known"] and not a["trusted"] else "alerts"
-        self.box(y, x, h, w, "alerts", border, right, rspec)
-        if flash_on and w > 12:
-            self.put(y, x + 2, " alerts ", border, curses.A_REVERSE)
-        iy, ix, ih, iw = y + 1, x + 2, h - 2, w - 4
-        note = self.alert_note()
-        if note and ih >= 2:
-            self.put(iy + ih - 1, ix, note[0][:iw], note[1])
-            ih -= 1
-        for i, (parts, source) in enumerate(self.alert_rows(a, ih)[:ih]):
-            used = sum(len(p[0]) for p in parts)
-            if source and used + len(source) + 2 <= iw:
-                self.put(iy + i, ix + iw - len(source), source, "dim")
-                self.runs(iy + i, ix, parts, iw - len(source) - 2)
-            else:
-                self.runs(iy + i, ix, parts, iw)
-
     def alert_note(self):
         if self.rough():
             return ("location approximate (%s)" % self.rough(), "warn")
@@ -869,8 +608,7 @@ class Panels(Cluster):
             return ("for your last known location", "warn")
         return None
 
-    CAT_SPEC = {"road": "pick", "fire": "hot", "police": "precip", "missing": "loc",
-                "utility": "where", "storm": "now", "space": "precip", "news": "label"}
+    CAT_SPEC = {"road": "pick", "fire": "hot"}
 
     def report_spec(self, r):
         return sev_spec(r["sev"]) if r["sev"] else self.CAT_SPEC.get(r["cat"], "value")
@@ -904,7 +642,7 @@ class Panels(Cluster):
                          ([] if a["trusted"] else [(" as of %s" % views.ago(a["age"]), "warn")]), ""))
         for r in self.reports:
             spec = self.report_spec(r)
-            mark = g["tri"] if r["tier"] == "official" else ("●" if g is UNI else "*")
+            mark = g["tri"] if r["tier"] == "official" else "●"
             rest = [x for x in r["detail"] + [r["where"], r["when"]] if x]
             rows.append(([(mark + " ", spec if r["tier"] == "official" else "label"),
                           (r["kind"], spec), ("  " + (" %s " % g["dot"]).join(rest), "value")],
@@ -1116,24 +854,16 @@ class Panels(Cluster):
         if others:
             out += [("", "value"), (g["h"] * width, "line"), ("", "value")]
             out.append(("AROUND YOU", "title"))
-            out.append(("%s official (an agency said so)   %s reported (news, unconfirmed)" % (
-                g["tri"], "●" if g is UNI else "*"), "dim"))
             out.append(("", "value"))
         for r in others:
             spec = self.report_spec(r)
-            mark = g["tri"] if r["tier"] == "official" else ("●" if g is UNI else "*")
+            mark = g["tri"] if r["tier"] == "official" else "●"
             out.append(("%s %s" % (mark, r["kind"]), spec))
             rest = [x for x in r["detail"] + [r["where"], r["when"], r["source"]] if x]
             for line in textwrap.wrap((" %s " % g["dot"]).join(rest), width - 2):
                 out.append(("  " + line, "value"))
             it = r["item"]
             extra = it.get("headline") or it.get("text") or ""
-            if r["tier"] == "reported":
-                extra = '"%s"%s' % (it["title"], (" %s %s" % (g["dot"], it["source"]))
-                                     if it.get("source") else "")
-            elif r["cat"] == "space":
-                extra = ("NOAA rates today's geomagnetic storm G%d. Strong storms can make GPS "
-                         "positions less accurate for hours." % it["g"])
             for line in textwrap.wrap(extra, width - 2):
                 out.append(("  " + line, "label"))
             out.append(("", "value"))

@@ -12,14 +12,11 @@ DEFAULT_REFRESH_MIN = 15
 
 
 def default_home():
-    env = os.environ.get("WEATHER_TUI_HOME")
+    env = os.environ.get("RIDGEWATCH_HOME")
     if env:
         return env
-    if os.name == "nt":
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "weather-tui")
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "weather-tui")
+    return os.path.join(base, "ridgewatch")
 
 
 def _write_json_atomic(path, data):
@@ -31,13 +28,7 @@ def _write_json_atomic(path, data):
             os.fsync(f.fileno())
         except OSError:
             pass
-    for attempt in range(5):           # Windows can briefly lock files (antivirus)
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            time.sleep(0.1 * (attempt + 1))
-    os.replace(tmp, path)
+    os.replace(tmp, path)              # atomic: a power cut leaves the old file or the new one
 
 
 class Store(object):
@@ -84,13 +75,11 @@ class Store(object):
         c.setdefault("follow", False)
         c.setdefault("gps_port", "auto")
         c.setdefault("gps_baud", 9600)
-        c.setdefault("windows_location", True)
-        c.setdefault("headlines", True)
-        c["headlines"] = bool(c["headlines"])
+        for old in ("windows_location", "headlines", "space_weather"):   # from weather-tui
+            c.pop(old, None)
         if c.get("display") not in ("auto", "day", "night", "normal"):
             c["display"] = "auto"
         c["wildfires"] = bool(c.get("wildfires", True))
-        c["space_weather"] = bool(c.get("space_weather", True))
         keys = c.get("keys_511") if isinstance(c.get("keys_511"), dict) else {}
         c["keys_511"] = {"GA": str(keys.get("GA") or "").strip(),
                          "NC": str(keys.get("NC") or "").strip()}
@@ -108,10 +97,10 @@ class Store(object):
             c["last"] = None
         if not isinstance(self.cache.get("locations"), dict):
             self.cache = {"locations": {}}
-        for name in ("news", "feeds"):
-            d = self.cache.get(name)
-            self.cache[name] = {k: v for k, v in d.items() if isinstance(v, dict)} \
-                if isinstance(d, dict) else {}
+        self.cache.pop("news", None)                 # from weather-tui
+        d = self.cache.get("feeds")
+        self.cache["feeds"] = {k: v for k, v in d.items() if isinstance(v, dict) and k != "space"} \
+            if isinstance(d, dict) else {}
 
     def save_config(self):
         try:
@@ -130,9 +119,6 @@ class Store(object):
                         key=lambda k: locs[k].get("used", 0), reverse=True)
         for k in others[10:]:
             del locs[k]
-        news = self.cache.get("news", {})          # headlines: the 6 most recent areas
-        for k in sorted(news, key=lambda k: news[k].get("tried", 0), reverse=True)[6:]:
-            del news[k]
         try:
             _write_json_atomic(self.cache_path, self.cache)
             return True

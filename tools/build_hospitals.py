@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build wxtui/hospitals.tsv.gz (for "nearest ER") from Medicare's hospital list.
+"""Build ridgewatch/hospitals.tsv.gz (for "nearest ER") from Medicare's hospital list.
 
     python tools/build_hospitals.py Hospital_General_Information.csv
 
@@ -29,8 +29,8 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-PLACES = os.path.join(ROOT, "wxtui", "places.tsv.gz")
-OUT = os.path.join(ROOT, "wxtui", "hospitals.tsv.gz")
+PLACES = os.path.join(ROOT, "ridgewatch", "places.tsv.gz")
+OUT = os.path.join(ROOT, "ridgewatch", "hospitals.tsv.gz")
 
 SPECIALTY = re.compile(r"\b(SURG\w*|ORTHO\w*|SPINE|HEART|CARDIAC|EYE|EAR|REHAB\w*|SPECIALTY|"
                        r"CANCER|ONCOLOG\w*|BEHAVIORAL|PSYCH\w*|KIDNEY|TRANSPLANT|LTAC|"
@@ -95,7 +95,7 @@ def main(csv_path):
                          r["State"].strip(), "%.4f" % where[0], "%.4f" % where[1]))
     rows.sort(key=lambda x: (x[3], x[2], x[1]))
     with gzip.open(OUT, "wt", encoding="utf-8", compresslevel=9) as f:
-        f.write("#weather-tui hospitals v1\tMedicare Hospital General Information (CMS, public "
+        f.write("#ridgewatch hospitals v1\tMedicare Hospital General Information (CMS, public "
                 "domain), placed by town or ZIP code; built from %s\n" % os.path.basename(csv_path))
         for row in rows:
             f.write("\t".join(row) + "\n")

@@ -2,8 +2,6 @@
 
   wildfires      National Interagency Fire Center: current wildland fires near you
                  (name, size, how contained). Public, no key; updated every 5 min.
-  space weather  NOAA Space Weather Prediction Center: solar storms strong enough
-                 to throw off GPS (G3 and up). Public, no key.
   511 roads      Georgia (511GA) and North Carolina (DriveNC): crashes, closures and
                  blocked lanes with exact positions. Each needs a developer key from
                  that state, set in config.json. South Carolina has no public feed.
@@ -21,13 +19,12 @@ import urllib.parse
 
 from . import __version__, geo, nws
 
-# One switch for tests: WEATHER_TUI_FEEDS=http://127.0.0.1:port points all of these
-# at a local fake server (as /wfigs, /swpc, /511ga, /drivenc).
-_TEST = os.environ.get("WEATHER_TUI_FEEDS", "").rstrip("/")
+# One switch for tests: RIDGEWATCH_FEEDS=http://127.0.0.1:port points all of these
+# at a local fake server (as /wfigs, /511ga, /drivenc).
+_TEST = os.environ.get("RIDGEWATCH_FEEDS", "").rstrip("/")
 WFIGS = (_TEST + "/wfigs") if _TEST else \
     "https://services3.arcgis.com/T4QMspbfLg3qTGWY/ArcGIS/rest/services/" \
     "WFIGS_Incident_Locations_Current/FeatureServer/0/query"
-SWPC = (_TEST + "/swpc") if _TEST else "https://services.swpc.noaa.gov/products/noaa-scales.json"
 ROADS = {   # state: (config key name, events URL, label)
     "GA": ("511ga", (_TEST + "/511ga") if _TEST else "https://511ga.org/api/v2/get/event", "511GA"),
     "NC": ("drivenc", (_TEST + "/drivenc") if _TEST else "https://www.drivenc.gov/api/v2/get/event",
@@ -37,12 +34,10 @@ ROADS = {   # state: (config key name, events URL, label)
 FIRE_EVERY = 10 * 60        # re-check fires this often, or after moving FIRE_MOVE_KM
 FIRE_MOVE_KM = 30.0
 FIRE_SHOW_KM = 80.0         # list fires within about 50 miles
-SPACE_EVERY = 30 * 60
 ROAD_EVERY = 5 * 60
 ROAD_SHOW_KM = 40.0         # road incidents within about 25 miles
-GPS_STORM = 3               # NOAA G3 "strong": satellite navigation problems possible
 
-UA = "Mozilla/5.0 (compatible; weather-tui/%s)" % __version__
+UA = "Mozilla/5.0 (compatible; ridgewatch/%s)" % __version__
 
 
 def _json(body):
@@ -96,19 +91,6 @@ def parse_fires(data):
                     "rx": str(p.get("IncidentTypeCategory") or "").upper() == "RX",
                     "lat": round(float(c[1]), 4), "lon": round(float(c[0]), 4)})
     return out
-
-
-# --------------------------------------------------------- space weather --
-
-def parse_space(data):
-    """NOAA scales today: {'g': 0-5, 'text': 'strong'}."""
-    today = (data or {}).get("0") or {}
-    g = today.get("G") or {}
-    try:
-        level = int(g.get("Scale") or 0)
-    except (TypeError, ValueError):
-        level = 0
-    return {"g": level, "text": str(g.get("Text") or "").strip().lower()}
 
 
 # -------------------------------------------------------------- 511 roads --
@@ -170,12 +152,10 @@ def near(items, lat, lon, km):
 # ---------------------------------------------------------------- fetching --
 
 def fetch(job):
-    """Run one job: ('fires', lat, lon) / ('space',) / ('roads', state, key)."""
+    """Run one job: ('fires', lat, lon) / ('roads', state, key)."""
     if job[0] == "fires":
         return {"items": parse_fires(_get(fire_url(job[1], job[2]), "the fire service")),
                 "at": [job[1], job[2]]}
-    if job[0] == "space":
-        return parse_space(_get(SWPC, "NOAA space weather"))
     if job[0] == "roads":
         _, url, label = ROADS[job[1]]
         q = urllib.parse.urlencode({"key": job[2], "format": "json"})

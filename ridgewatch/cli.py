@@ -1,10 +1,11 @@
-#!/usr/bin/env python3
-"""weather-tui: terminal weather from the National Weather Service.
+"""Ridgewatch: a vehicle awareness dashboard for the terminal. Official weather
+warnings, where you are, live GPS gauges, wildfires and road incidents.
 
-    python weather.py                      full-screen dashboard
-    python weather.py --plain              one-shot text report (last location)
-    python weather.py --place "clemson sc" pick a town (or ZIP) from the command line
-    python weather.py --coords "34.6834, -82.8374"
+    ./rw                        the dashboard
+    ./rw --follow               follow the GPS
+    ./rw --place "clemson sc"   pick a town (or ZIP) by name
+    ./rw --coords "34.6834, -82.8374"
+    ./rw --plain                one-shot text report (for checking things from a script)
 """
 
 import argparse
@@ -13,11 +14,7 @@ import sys
 import time
 import traceback
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-if HERE not in sys.path:
-    sys.path.insert(0, HERE)
-
-from wxtui import __version__, follow, places, plain, settings  # noqa: E402
+from . import __version__, follow, places, plain, settings
 
 
 def _location_from_args(args, store):
@@ -51,10 +48,9 @@ def _location_from_args(args, store):
 
 def _follow_loc(store, wait=20.0):
     """Live position for the text report (waits up to `wait` seconds for a fix)."""
-    from wxtui import locate
+    from . import locate
     c = store.config
-    finder = locate.Locator(c.get("gps_port", "auto"), c.get("gps_baud", 9600),
-                            c.get("windows_location", True))
+    finder = locate.Locator(c.get("gps_port", "auto"), c.get("gps_baud", 9600))
     fix, start = None, time.time()
     try:
         while fix is None and time.time() - start < wait:
@@ -101,20 +97,17 @@ def _plain(store, loc, fetch=True):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="weather", description="Terminal weather from the National Weather Service.")
+        prog="rw", description="Ridgewatch: a vehicle awareness dashboard for the terminal.")
     ap.add_argument("--plain", action="store_true", help="print a text report and exit")
     ap.add_argument("--place", metavar="TEXT", help="town or ZIP, e.g. \"clemson sc\" or 29631")
     ap.add_argument("--coords", metavar="LAT,LON", help="e.g. \"34.6834, -82.8374\"")
     ap.add_argument("--follow", action="store_true",
-                    help="follow your live location (USB GPS or Windows location)")
+                    help="follow your live location (USB GPS)")
     ap.add_argument("--home", metavar="DIR",
                     help="where settings and saved data live (default: your user folder)")
-    ap.add_argument("--ascii", action="store_true", help="plain ASCII lines instead of box drawing")
     ap.add_argument("--display", choices=["auto", "day", "night", "normal"],
                     help="screen look: day = high contrast, night = dim, auto = by the sun")
-    ap.add_argument("--colors", choices=["auto", "256", "16", "8", "mono"], default="auto",
-                    help="force a color level (default: auto)")
-    ap.add_argument("--version", action="version", version="weather-tui " + __version__)
+    ap.add_argument("--version", action="version", version="ridgewatch " + __version__)
     args = ap.parse_args(argv)
 
     store = settings.Store(args.home)
@@ -129,33 +122,34 @@ def main(argv=None):
     if args.plain or not (sys.stdin.isatty() and sys.stdout.isatty()):
         return _plain(store, loc)
 
-    ascii_mode = args.ascii
-    if not ascii_mode and os.name != "nt":
-        import locale
-        try:
-            locale.setlocale(locale.LC_ALL, "")
-        except locale.Error:
-            pass
-        if "utf" not in (locale.getpreferredencoding(False) or "").lower():
-            ascii_mode = True
-
+    import locale
     try:
-        from wxtui import ui
-        ui.run(store, loc, {"ascii": ascii_mode, "colors": args.colors, "display": args.display})
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        pass
+    if "utf" not in (locale.getpreferredencoding(False) or "").lower():
+        sys.exit("Ridgewatch needs a UTF-8 terminal (try: LANG=C.UTF-8 ./rw).")
+
+    from . import ui
+    from .panels import NeedsColors
+    try:
+        ui.run(store, loc, {"display": args.display})
     except KeyboardInterrupt:
         pass
-    except Exception as e:
+    except NeedsColors:
+        sys.exit("Ridgewatch needs a 256-color terminal (this one reports TERM=%s). "
+                 "Try: TERM=xterm-256color ./rw" % os.environ.get("TERM", "?"))
+    except Exception:
         log = os.path.join(store.home, "crash.log")
         try:
             with open(log, "a", encoding="utf-8") as f:
-                f.write("\n=== %s weather-tui %s ===\n" % (time.ctime(), __version__))
+                f.write("\n=== %s ridgewatch %s ===\n" % (time.ctime(), __version__))
                 traceback.print_exc(file=f)
             where = log
         except OSError:
             where = None
-        why = (": " + str(e)) if type(e).__module__ == "wxtui.screen" else ""
-        print("The full screen couldn't run%s%s. Showing the text report instead.\n"
-              % (why, (" (details in %s)" % where) if where else ""))
+        print("Ridgewatch stopped on an error%s. Showing the text report instead.\n"
+              % ((" (details in %s)" % where) if where else ""))
         return _plain(store, store.config.get("last") or loc, fetch=False)
     finally:
         try:

@@ -31,7 +31,7 @@ def report(loc, entry, now=None, unicode_ok=None):
     pts = entry.get("points") or {}
     if not label and pts.get("city"):
         label = "near %s, %s" % (pts["city"], pts["state"])
-    head = "weather %s%s%s" % (__version__, dot, name)
+    head = "ridgewatch %s%s%s" % (__version__, dot, name)
     if label and label not in name:
         head += " (%s)" % label
     lines.append(head + dot + status)

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Start Ridgewatch from anywhere:  /path/to/ridgewatch/rw [options]
+cd "$(dirname "$(readlink -f "$0")")" && exec python3 -m ridgewatch "$@"

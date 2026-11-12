@@ -83,26 +83,17 @@ _PAIRS = {
     27: (18, 25),
 }
 
-# 16-color terminals
-_DAY16 = {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 0, 8: 0, 9: 1, 10: 2, 11: 3, 12: 4,
-          13: 5, 14: 6, 15: 0}
-_NIGHT16 = {0: 8, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 8, 8: 8, 9: 1, 10: 2, 11: 3, 12: 4,
-            13: 5, 14: 6, 15: 7}
-
-
 def adapt(spec, mode):
-    """(c256, c16, flags) for the normal look -> the same for day or night."""
+    """(color, flags) for the normal look -> the same for day or night."""
     if mode not in ("day", "night"):
         return spec
-    c256, c16, flags = spec
-    pick = _PAIRS.get(c256)
+    color, flags = spec
+    pick = _PAIRS.get(color)
     if mode == "day":
-        c = pick[0] if pick else _scaled(c256, 0.15)
-        return (c, _DAY16.get(c16, 0), "bold")          # bold everything, nothing dim
-    c = pick[1] if pick else _scaled(c256, 0.10)
-    return (c, _NIGHT16.get(c16, 8), "")                  # no bold: it brightens text
+        return (pick[0] if pick else _scaled(color, 0.15), "bold")   # bold everything, nothing dim
+    return (pick[1] if pick else _scaled(color, 0.10), "")           # no bold: it brightens text
 
 
 def background(mode):
-    """(c256, c16) background for the mode; None keeps the terminal's own."""
-    return {"day": (231, 15), "night": (16, 0)}.get(mode)
+    """Background color for the mode; None keeps the terminal's own."""
+    return {"day": 231, "night": 16}.get(mode)

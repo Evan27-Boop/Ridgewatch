@@ -1,28 +1,24 @@
-"""Where am I? Live position for follow mode, from (best first):
+"""Where am I? Live position for follow mode, from a USB GPS receiver ("puck").
 
-1. A USB GPS receiver ("puck"). It shows up as a serial port (COM3 on
-   Windows, /dev/ttyACM0 on Linux) and sends plain-text NMEA sentences.
-   The port is found automatically. A phone app that sends NMEA over the
-   network also works: set "gps_port" to "tcp://PHONE-IP:PORT".
-2. Windows' own location (Wi-Fi / internet based, rough), read through the
-   PowerShell that comes with Windows. Nothing to install.
+It shows up as a serial port (/dev/ttyACM0, or /dev/ttyGPS if you've given it a
+fixed name with a udev rule) and sends plain-text NMEA sentences. The port is
+found automatically. A phone app that sends NMEA over the network also works:
+set "gps_port" to "tcp://PHONE-IP:PORT".
 
-Each source runs on its own background thread and can fail on its own.
-Standard library only.
+The reader runs on its own background thread, and reconnects by itself if the
+GPS is unplugged. Standard library only.
 """
 
-import atexit
 import glob
 import math
 import os
 import re
 import socket
-import subprocess
+import termios
 import threading
 import time
 
 GPS_FRESH = 5.0          # seconds a GPS fix stays current
-WIN_FRESH = 90.0         # Windows location updates slowly
 KNOTS_TO_MPH = 1.15078
 M_TO_FT = 3.28084
 
@@ -153,32 +149,9 @@ class NmeaState(object):
 
 def candidate_ports():
     """Serial ports that might be a GPS, most likely first."""
-    if os.name == "nt":
-        try:
-            import winreg
-        except ImportError:
-            return []
-        ports = []
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DEVICEMAP\SERIALCOMM")
-        except OSError:
-            return []
-        i = 0
-        while True:
-            try:
-                dev, com, _ = winreg.EnumValue(key, i)
-            except OSError:
-                break
-            i += 1
-            dev_l = str(dev).lower()
-            if "bth" in dev_l or "bluetooth" in dev_l:
-                continue                       # Bluetooth ports can hang when opened
-            usb = any(s in dev_l for s in ("usbser", "silabser", "prolific", "vcp", "ch34", "usb"))
-            ports.append((0 if usb else 1, str(com)))
-        winreg.CloseKey(key)
-        return [p for _, p in sorted(ports)]
-    found = sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
+    found = [p for p in ("/dev/ttyGPS",) if os.path.exists(p)]
     found += sorted(glob.glob("/dev/serial/by-id/*gps*")) + sorted(glob.glob("/dev/serial/by-id/*GPS*"))
+    found += sorted(glob.glob("/dev/ttyACM*")) + sorted(glob.glob("/dev/ttyUSB*"))
     return found
 
 
@@ -189,22 +162,8 @@ def _open_port(name, baud):
         s = socket.create_connection((host, int(port)), timeout=6)
         s.settimeout(15)
         return _SocketReader(s)
-    if os.name == "nt":
-        path = name if name.startswith("\\\\.\\") else "\\\\.\\" + name
-        port = name.replace("\\\\.\\", "")
-        try:
-            subprocess.run(["mode", port + ":", "BAUD=%d" % baud, "PARITY=n", "DATA=8", "STOP=1"],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=5,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except (OSError, subprocess.SubprocessError):
-            pass                               # USB GPS pucks ignore the speed anyway
-        f = open(path, "rb", buffering=0)
-        _windows_read_timeouts(f)
-        return f
     fd = os.open(name, os.O_RDONLY | os.O_NOCTTY)
     try:
-        import termios
         attrs = termios.tcgetattr(fd)
         speed = getattr(termios, "B%d" % baud, termios.B9600)
         attrs[0] = termios.IGNPAR                       # iflag
@@ -215,31 +174,9 @@ def _open_port(name, baud):
         attrs[6][termios.VMIN] = 0                      # return after 1 s even if silent
         attrs[6][termios.VTIME] = 10
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
-    except (ImportError, OSError, Exception):
+    except (OSError, termios.error):
         pass                                            # a pty or odd device: read anyway
     return os.fdopen(fd, "rb", buffering=0)
-
-
-def _windows_read_timeouts(f):
-    """Make reads on a COM port return within a second, data or not."""
-    try:
-        import ctypes
-        import msvcrt
-        from ctypes import wintypes
-
-        class COMMTIMEOUTS(ctypes.Structure):
-            _fields_ = [("ReadIntervalTimeout", wintypes.DWORD),
-                        ("ReadTotalTimeoutMultiplier", wintypes.DWORD),
-                        ("ReadTotalTimeoutConstant", wintypes.DWORD),
-                        ("WriteTotalTimeoutMultiplier", wintypes.DWORD),
-                        ("WriteTotalTimeoutConstant", wintypes.DWORD)]
-
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.SetCommTimeouts.argtypes = [wintypes.HANDLE, ctypes.POINTER(COMMTIMEOUTS)]
-        handle = msvcrt.get_osfhandle(f.fileno())
-        k32.SetCommTimeouts(handle, ctypes.byref(COMMTIMEOUTS(50, 0, 1000, 0, 0)))
-    except Exception:
-        pass                                   # reads may block longer; still works
 
 
 class _SocketReader(object):
@@ -395,193 +332,18 @@ class GpsReader(object):
             time.sleep(2)
 
 
-# ------------------------------------------------------- Windows location --
-
-# Uses the location service built into Windows through Windows PowerShell 5.1
-# (included with Windows 10/11). Prints one line every 5 seconds:
-#   fix LAT LON ACCURACY_M ALTITUDE_M SPEED_M_S COURSE      (NaN = unknown)
-#   status STATUS PERMISSION
-WINDOWS_LOCATION_PS = r"""
-$ErrorActionPreference = 'Stop'
-$out = [Console]::Out
-try { Add-Type -AssemblyName System.Device }
-catch { $out.WriteLine('status Unavailable Unknown'); $out.Flush(); exit 3 }
-$inv = [Globalization.CultureInfo]::InvariantCulture
-$w = New-Object System.Device.Location.GeoCoordinateWatcher([System.Device.Location.GeoPositionAccuracy]::High)
-try { $w.MovementThreshold = 0 } catch { }
-[void]$w.TryStart($false, [TimeSpan]::FromSeconds(1))
-while ($true) {
-  try {
-    $loc = $w.Position.Location
-    if ($loc -ne $null -and -not $loc.IsUnknown) {
-      $vals = @($loc.Latitude, $loc.Longitude, $loc.HorizontalAccuracy, $loc.Altitude, $loc.Speed, $loc.Course)
-      $txt = ($vals | ForEach-Object { ([double]$_).ToString('R', $inv) }) -join ' '
-      $out.WriteLine('fix ' + $txt)
-    } else {
-      $out.WriteLine('status ' + $w.Status + ' ' + $w.Permission)
-    }
-  } catch {
-    $out.WriteLine('status Error Unknown')
-  }
-  $out.Flush()
-  Start-Sleep -Seconds 5
-}
-"""
-
-
-def _one_line(script):
-    """Join the script into one line so it passes through -Command untouched."""
-    out = ""
-    for line in (l.strip() for l in script.strip().splitlines()):
-        if not line:
-            continue
-        if not out:
-            out = line
-        elif out.endswith("{") or line.startswith(("}", "catch", "else", "finally")):
-            out += " " + line
-        else:
-            out += "; " + line
-    return out
-
-
-def parse_windows_line(line, now=None):
-    """-> ('fix', Fix) or ('status', text) or (None, None)."""
-    parts = line.split()
-    if not parts:
-        return None, None
-    if parts[0] == "fix" and len(parts) >= 7:
-        lat, lon = _num(parts[1]), _num(parts[2])
-        if lat is None or lon is None or not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            return None, None
-        acc, alt, spd, crs = (_num(p) for p in parts[3:7])
-        speed = spd * 2.23694 if spd is not None and spd >= 0 else None
-        course = crs if (crs is not None and speed is not None and speed >= 2) else None
-        return "fix", Fix(lat, lon, "windows", acc_m=acc, alt_m=alt, speed_mph=speed,
-                          course=course, t=now)
-    if parts[0] == "status":
-        st = parts[1] if len(parts) > 1 else ""
-        perm = parts[2] if len(parts) > 2 else ""
-        if perm == "Denied" or st == "Disabled":
-            return "status", ("Windows location is off (Settings > Privacy & security > "
-                              "Location: turn on 'Let desktop apps access your location')")
-        if st == "Unavailable":
-            return "status", "Windows location isn't available on this PC"
-        if st == "Initializing":
-            return "status", "Windows location starting"
-        if st == "NoData":
-            return "status", "Windows location has no position yet"
-        return "status", "Windows location: " + (st or "unknown")
-    return None, None
-
-
-def windows_location_command():
-    test = os.environ.get("WEATHER_TUI_WINLOC_CMD")      # for testing without Windows
-    if test:
-        return test.split("|")
-    root = os.environ.get("SystemRoot", r"C:\Windows")
-    ps = os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-    if not os.path.exists(ps):
-        ps = "powershell.exe"
-    return [ps, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            _one_line(WINDOWS_LOCATION_PS)]
-
-
-class WindowsLocation(object):
-    """Keeps one quiet PowerShell running that reports Windows' location."""
-
-    def __init__(self, command=windows_location_command):
-        self.command = command
-        self.lock = threading.Lock()
-        self.fix = None
-        self.status = "Windows location starting"
-        self.proc = None
-        self._stop = False
-        atexit.register(self.stop)              # never leave PowerShell running behind
-        self.thread = threading.Thread(target=self._run, name="winloc", daemon=True)
-        self.thread.start()
-
-    def current(self, now=None):
-        now = time.time() if now is None else now
-        with self.lock:
-            f = self.fix
-        if f and now - f.time <= WIN_FRESH:
-            return f
-        return None
-
-    def describe(self):
-        with self.lock:
-            if self.fix and time.time() - self.fix.time <= WIN_FRESH:
-                return "Windows location"
-            return self.status
-
-    def stop(self):
-        self._stop = True
-        p = self.proc
-        if p and p.poll() is None:
-            try:
-                p.kill()
-            except OSError:
-                pass
-
-    def _run(self):
-        fails = 0
-        while not self._stop:
-            try:
-                self.proc = subprocess.Popen(
-                    self.command(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True,
-                    encoding="ascii", errors="replace",
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            except (OSError, ValueError) as e:
-                with self.lock:
-                    self.status = "Windows location unavailable (%s)" % e.__class__.__name__
-                return
-            started = time.time()
-            for line in self.proc.stdout:
-                if self._stop:
-                    break
-                kind, val = parse_windows_line(line)
-                with self.lock:
-                    if kind == "fix":
-                        self.fix = val
-                        self.status = "Windows location"
-                    elif kind == "status":
-                        self.status = val
-            code = self.proc.wait()
-            if self._stop:
-                return
-            if code == 3:
-                with self.lock:
-                    self.status = "Windows location isn't available on this PC"
-                return
-            fails = 0 if time.time() - started > 120 else fails + 1
-            if fails >= 5:
-                with self.lock:
-                    self.status = "Windows location keeps failing"
-                return
-            time.sleep(min(60, 5 * (fails + 1)))
-
-
 # ------------------------------------------------------------- together --
 
 class Locator(object):
-    """Best current fix: GPS if it has one, else Windows location."""
+    """The current GPS fix, and what the GPS is doing."""
 
-    def __init__(self, gps_port="auto", baud=9600, windows=True):
+    def __init__(self, gps_port="auto", baud=9600):
         self.gps = None
-        self.win = None
         if (gps_port or "").lower() != "off":
             self.gps = GpsReader(gps_port, baud)
-        if windows and (os.name == "nt" or os.environ.get("WEATHER_TUI_WINLOC_CMD")):
-            self.win = WindowsLocation()
 
     def current(self, now=None):
-        for src in (self.gps, self.win):
-            if src:
-                f = src.current(now)
-                if f:
-                    return f
-        return None
+        return self.gps.current(now) if self.gps else None
 
     def gps_status(self, now=None):
         """('fix'|'searching'|'none', text) for the GPS box."""
@@ -598,19 +360,11 @@ class Locator(object):
         return "none", status
 
     def describe(self):
-        bits = []
-        if self.gps:
-            bits.append(self.gps.describe())
-        if self.win:
-            bits.append(self.win.describe())
-        if not bits:
-            bits.append("no location sources (GPS turned off in settings)")
-        return bits
+        return [self.gps.describe() if self.gps else "GPS turned off in settings"]
 
     def stop(self):
-        for src in (self.gps, self.win):
-            if src:
-                src.stop()
+        if self.gps:
+            self.gps.stop()
 
 
 # ------------------------------------------------------------- helpers --
