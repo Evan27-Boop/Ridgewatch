@@ -216,12 +216,17 @@ class Panels(Cluster):
         self.draw_bar(H, W)
         if self.mode == "alerts":
             self.draw_alerts_view(1, 0, ch, W, entry)
-        elif self.mode == "rain":
-            self.box_precip(1, 0, ch, W, entry)
+        elif self.mode == "rain":                # the weather details: both 24-hour graphs
+            top = ch // 2
+            self.box_weather(1, 0, top, W, entry, title="weather %s next 24h" % self.g["dot"],
+                             graph="temp")
+            self.box_precip(1 + top, 0, ch - top, W, entry)
         else:
             self.draw_main(1, 0, ch, W, entry)
             if self.mode == "pick":
                 self.draw_picker(ch + 1, W)
+            elif self.mode == "wpick":
+                self.draw_wpick(ch + 1, W)
             elif self.mode == "save":
                 self.draw_save(ch + 1, W)
         self.scr.noutrefresh()
@@ -332,7 +337,7 @@ class Panels(Cluster):
                     ("follow", "FOLLOW GPS: ON" if self.follow else "FOLLOW GPS: OFF",
                      "button_on" if self.follow else "button"),
                     ("save", "SAVE HERE", "button"), ("places", "PLACES", "button")]
-        if self.mode in ("alerts", "pick"):
+        if self.mode in ("alerts", "pick", "wpick"):
             return [("back", "BACK", "button"), ("up", "UP", "button"),
                     ("down", "DOWN", "button")]
         if self.mode == "save":
@@ -387,7 +392,7 @@ class Panels(Cluster):
         hint = {"NO FIX": "Needs a clear view of the sky",
                 "NO GPS": "Connect a receiver or check the cable",
                 "2D FIX": "Too few satellites for elevation"}.get(gps[0], "")
-        boxes = [("DATA LINK", link[0], link[1], link[2], "label", "", ""),
+        boxes = [("DATA LINK", link[0], link[1], link[2], "label", "", self.last_online_text()),
                  ("GPS", gps[0], gps[1], gdetail or "", gspec2,
                   self.gps_port() if self.follow else "", hint)]
         h1 = h // 2
@@ -407,7 +412,7 @@ class Panels(Cluster):
         g = self.locator.gps if self.locator else None
         return (g.port or "") if g else ""
 
-    def box_weather(self, y, x, h, w, entry, title="WEATHER", spacer=False):
+    def box_weather(self, y, x, h, w, entry, title="WEATHER", spacer=False, graph="auto"):
         """What it's like now, what's coming (rain, highs and lows, daylight), and a
         24-hour graph: chance of rain when rain is likely, otherwise temperature.
         When the station's reading is old, this hour's forecast stands in (and the
@@ -493,10 +498,75 @@ class Panels(Cluster):
         if sun_text:
             self.put(iy + 1, ix + iw - len(sun_text), sun_text, "label")
         if graph_rows >= 1 and p["hours"]:
-            if rainy:
+            if rainy and graph != "temp":
                 self.rain_graph(iy + 2 + gap, ix, graph_rows, iw, p["hours"])
             else:
                 self.temp_graph(iy + 2 + gap, ix, graph_rows, iw, p["hours"])
+
+    def tile_weather(self, y, x, h, w, entry):
+        """The weather in a few lines of text; tap it for the 24-hour graphs."""
+        g = self.g
+        n = views.view_now(entry)
+        p = views.view_precip(entry)
+        if n["ok"]:
+            right, rspec = views.now_source(n, g["dot"]), ("warn" if n["stale"] else "label")
+        else:
+            right, rspec = None, "label"
+        self.box(y, x, h, w, "WEATHER", "now", right, rspec)
+        iy, ix, ih, iw = y + 1, x + 2, h - 2, w - 4
+        sep = (" %s " % g["dot"], "label")
+        lines = []
+        if n["ok"]:
+            head = []
+            if n["temp"] is not None:
+                head.append(("%d%sF" % (n["temp"], g["deg"]), temp_spec(n["temp"])))
+            if n["desc"]:
+                head += [("  ", "label"), (n["desc"], "value")]
+            if n["feels"] is not None and n["temp"] is not None and n["feels"] != n["temp"]:
+                head = first_fit([head + [sep, ("feels %d%s" % (n["feels"], g["deg"]), "value")],
+                                  head], iw)
+            lines.append(head)
+            more = []
+            if n["wind"]:
+                more += [("wind ", "label"), (n["wind"], "value")]
+            if n["humidity"] is not None:
+                more = first_fit([more + ([sep] if more else []) +
+                                  [("humidity ", "label"), ("%d%%" % n["humidity"], "value")], more], iw)
+            if more:
+                lines.append(more)
+        elif entry.get("fatal"):
+            lines.append([(entry["fatal"], "err")])
+        elif self.fetcher.busy:
+            lines.append([("Loading", "label")])
+        else:
+            lines.append([("No current conditions", "warn")])
+        hl = views.temp_range(p)
+        if hl:
+            hi_t, lo_t = hl[0][0], hl[1][0]
+            lines.append([("high ", "label"), ("%d%s" % (hi_t, g["deg"]), temp_spec(hi_t)),
+                          (" %s" % hl[0][1], "label"), ("  low ", "label"),
+                          ("%d%s" % (lo_t, g["deg"]), temp_spec(lo_t)), (" %s" % hl[1][1], "label")])
+        outlook = views.rain_outlook(p)
+        if outlook:
+            text, pop = outlook
+            rain = [(text, pop_spec(pop) if pop >= 30 else "value")]
+            if p["total_in"] is not None and p["total_in"] >= 0.01:
+                rain = first_fit([rain + [sep, ("%s%.2f in" % (g["approx"], p["total_in"]), "value")],
+                                  rain], iw)
+            lines.append(rain)
+        elif entry.get("hourly"):
+            lines.append([("Saved forecast has expired", "warn")])
+        elif not self.fetcher.busy:
+            lines.append([("No forecast", "warn")])
+        if p["age"] is not None and p["age"] > 90 * 60 and p["hours"]:
+            lines.append([("Forecast from %s" % views.ago(p["age"]), "warn")])
+        sun_text = self.sun_text()
+        if sun_text:
+            lines.append([(sun_text[0].upper() + sun_text[1:], "label")])
+        for i, parts in enumerate(lines[:ih]):
+            self.runs(iy + i, ix, parts, iw)
+        if ih >= len(lines) + 2:
+            self.put(iy + ih - 1, ix, "Tap for the 24-hour graphs"[:iw], "dim")
 
     def temp_graph(self, iy, ix, bar_rows, iw, hours):
         """Bars for the temperature each hour on a fixed 20-100 F scale (so a bar the
@@ -858,6 +928,41 @@ class Panels(Cluster):
         x = self.put(iy + 2, ix, g["sel"] + " ", "hot")
         x = self.put(iy + 2, x, self.save_text[-(iw - 4):], "title")
         self.put(iy + 2, x, " ", "value", curses.A_REVERSE)
+
+    def draw_wpick(self, H, W):
+        """Choose what WAYPOINT points to: two-row choices, easy to tap."""
+        g = self.g
+        p = self.wpick
+        pw = min(W - 4, 80)
+        ph = min(H - 4, 22)
+        px, py = (W - pw) // 2, max(1, (H - ph) // 2)
+        self.clear_area(py, px, ph, pw)
+        self.box(py, px, ph, pw, "waypoint", "pick")
+        iy, ix, ih, iw = py + 1, px + 2, ph - 2, pw - 4
+        self.put(iy, ix, "Show the distance and direction to:"[:iw], "label")
+        self.put(iy + 1, ix, g["h"] * iw, "line")
+        list_y, list_h = iy + 2, ih - 2
+        items, sel = p["items"], p["sel"]
+        cap = max(1, list_h // 2)
+        p["page"] = cap
+        if sel < p["top"]:
+            p["top"] = sel
+        if sel >= p["top"] + cap:
+            p["top"] = sel - cap + 1
+        for row, i in enumerate(range(p["top"], min(len(items), p["top"] + cap))):
+            kind, val, detail = items[i]
+            yy = list_y + 2 * row
+            self.pick_rows.append((yy, ix - 1, iw + 2, i))
+            rev = curses.A_REVERSE if i == sel else 0
+            if rev:
+                self.put(yy, ix - 1, " " * (iw + 2), "value", rev)
+                self.put(yy + 1, ix - 1, " " * (iw + 2), "value", rev)
+            name = val["name"] if kind == "place" else val
+            self.put(yy, ix, name[: iw - len(detail) - 2], "value", rev)
+            self.put(yy, ix + iw - len(detail), detail, "dim", rev)
+        if len(items) > cap:
+            more = " %d/%d " % (sel + 1, len(items))
+            self.put(py + ph - 1, px + pw - len(more) - 2, more, "label")
 
     # alerts detail ------------------------------------------------------
     def alert_text_lines(self, entry, width):

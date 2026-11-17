@@ -1,4 +1,4 @@
-# Ridgewatch 3.2.0
+# Ridgewatch 3.3.0
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.
@@ -30,16 +30,17 @@ show a dim dash and the reason.
 
 | Tile | Shows | Turns amber or red when |
 |---|---|---|
-| SPEED | speed, heading, and the trip: miles, time moving and stopped, average and top speed | |
-| GRADE | grade in big digits, the change over the last mile, a gauge from -12% to +12% | amber at 6%, red at 10% or on a long descent (500+ ft lost in 2 miles) |
-| ELEV | elevation, the range over the last few miles, total climb and descent | amber on a 2D fix |
+| SPEED | speed, and the trip: miles, time moving and stopped, average and top speed | |
+| ELEV | elevation, the grade (climbing or descending, change over the last mile), total climb and descent | amber at 6% grade or on a 2D fix, red at 10% or on a long descent (500+ ft lost in 2 miles) |
+| COMPASS | heading in big letters (N, NE...) and degrees; the last heading, dimmed, while stopped | |
 | HERE | distance and direction from the nearest town, county, next towns ahead | amber when the GPS is lost |
 | GRID | map grid (MGRS / US National Grid), coordinates, accuracy | |
-| SIGNAL | "online", or the way back to where the internet last answered | amber while offline |
+| WAYPOINT | distance and direction to where the trip started; tap to point it at a saved place or the last spot with internet | |
 | ER | the nearest emergency room, straight-line | amber when over 30 miles away |
 | ALERTS | a master light (worst official warning, ALL CLEAR, or NOT UPDATING) and the list | the warning's own color |
-| WEATHER | conditions, high and low, rain outlook, daylight, and a 24-hour graph (temperature on a fixed 20-100°F scale, or chance of rain when rain is likely) | amber title when the station is old and the forecast is standing in |
-| DATA LINK | ONLINE, LIMITED, STALE, OFFLINE | |
+| RADIO | scanner calls as text, once the radio helper exists; until then it says it isn't connected | |
+| WEATHER | conditions, high and low, rain outlook, daylight, in words; tap for the 24-hour temperature and rain graphs | amber title when the station is old and the forecast is standing in |
+| DATA LINK | ONLINE, LIMITED, STALE, OFFLINE; while offline, the way back to where the internet last answered | |
 | GPS | 3D FIX, 2D FIX, NO FIX, NO GPS, OFF | |
 
 Sounds: two beeps for a new official warning; one beep when DATA LINK or GPS changes.
@@ -61,8 +62,8 @@ It works on machines with a backlight (laptops and tablets), with no extra setup
 
 ## Touch
 
-Everything day to day works by tapping. Tap **ALERTS** for the full alert list and
-**WEATHER** for the rain outlook. The bar along the bottom has **DISPLAY** (day, night,
+Everything day to day works by tapping. Tap **ALERTS** for the full alert list,
+**WEATHER** for the 24-hour graphs, and **WAYPOINT** to choose where it points. The bar along the bottom has **DISPLAY** (day, night,
 auto), **REFRESH**, **FOLLOW GPS** (on or off), **SAVE HERE** (saves this spot under the
 nearest town's name) and **PLACES** (your saved places and following the GPS, as a list
 to tap). Detail screens have **BACK**, and **UP** / **DOWN** where there's a list.

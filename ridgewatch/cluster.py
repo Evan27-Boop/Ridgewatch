@@ -1,13 +1,13 @@
-"""The gauge-cluster main screen (needs a window of 120x36 or more).
+"""The gauge-cluster main screen (needs 120 columns and 34 rows for the tiles).
 
 Every tile has a fixed spot, so your eye learns where things are:
 
-    SPEED | GRADE | ELEV          big digits, the things that change by the second
-    HERE            | GRID        where you are, in words and as a map grid
-    SIGNAL | ER                   way back to the internet, nearest emergency room
-    ALERTS                        a master light (worst warning) and the list
-    WEATHER         | DATA LINK   weather and its graph; internet and GPS status
-                    | GPS
+    SPEED    | ELEV     | COMPASS     big type, the things that change by the second
+    HERE                | GRID        where you are, in words and as a map grid
+    WAYPOINT | ER                     the way back to a place; nearest emergency room
+    ALERTS                            a master light (worst warning) and the list
+    RADIO    | WEATHER  | DATA LINK   scanner calls (later); weather in words; internet
+                        | GPS         and GPS status
 
 A tile's border color is its warning light. Unknown values show a dim dash and
 the reason, and the tile stays where it is.
@@ -29,6 +29,19 @@ DESCENT_FT = 500                        # this much lost over 2 miles is a long 
 ER_FAR_KM = 48.0                        # nearest ER over ~30 miles: amber
 
 
+# Big letters for the compass (N, E, S, W): pixel rows, '#' is lit. 12 tall for the
+# 6-row size, 8 tall for the 4-row size; E and S reuse the 7-segment digits.
+LETTERS = {
+    6: {"N": ["##....##", "###...##", "###...##", "####..##", "##.#..##", "##.##.##",
+              "##..#.##", "##..####", "##...###", "##...###", "##....##", "##....##"],
+        "W": ["##....##", "##....##", "##....##", "##....##", "##.##.##", "##.##.##",
+              "##.##.##", "##.##.##", "##.##.##", "########", "###..###", "##....##"]},
+    4: {"N": ["#...#", "##..#", "##..#", "#.#.#", "#.#.#", "#..##", "#..##", "#...#"],
+        "W": ["#...#", "#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"]},
+}
+LETTER_SEGS = {"E": "afged", "S": "afgcd"}
+
+
 def digit_rows(text, rows=6):
     """Big 7-segment digits as `rows` strings of half-block characters.
     6 rows: 8 wide with 2-wide strokes; 4 rows: 5 wide with thin strokes.
@@ -45,7 +58,14 @@ def digit_rows(text, rows=6):
             cw = 2 if rows >= 6 else 1
             out = [r + " " * cw for r in out[:-1]] + [out[-1] + (full if rows >= 6 else bot) * cw]
             continue
-        segs = SEG.get(ch)
+        bitmap = LETTERS[6 if rows >= 6 else 4].get(ch)
+        if bitmap:
+            for i in range(rows):
+                t, b = bitmap[2 * i], bitmap[2 * i + 1]
+                out[i] += "".join(full if t[c] == "#" and b[c] == "#" else top if t[c] == "#"
+                                  else bot if b[c] == "#" else " " for c in range(len(t)))
+            continue
+        segs = SEG.get(ch) or LETTER_SEGS.get(ch)
         if segs is None:
             continue
         P = [[0] * wd for _ in range(hp)]
@@ -88,40 +108,43 @@ class Cluster(object):
         drows = 6 if h >= 38 else 4
         ah = 8 if h >= 43 else 7 if h >= 39 else 6
         gh = drows + 5
-        wh = h - gh - 10 - ah
-        return {"drows": drows, "gauges": gh, "here": 5, "signal": 5, "alerts": ah, "weather": wh}
+        mid = 5 if h >= 40 else 4                 # WAYPOINT and ER need two lines
+        wh = h - gh - 5 - mid - ah
+        return {"drows": drows, "gauges": gh, "here": 5, "mid": mid, "alerts": ah, "bottom": wh}
 
     def draw_cluster(self, y, x, h, w, entry):
         p = self.cluster_plan(h)
-        sw = w // 3                          # right column: GRID, ELEV, DATA LINK / GPS
+        sw = w // 3                          # right column: COMPASS, GRID, DATA LINK / GPS
         lw = w - sw
-        g1 = lw // 2
+        g1 = lw // 2                         # left and middle columns
         gh = p["gauges"]
         self.gauge_speed(y, x, gh, g1, p["drows"])
-        self.gauge_grade(y, x + g1, gh, lw - g1, p["drows"])
-        self.gauge_elev(y, x + lw, gh, sw, p["drows"])
+        self.gauge_elev(y, x + g1, gh, lw - g1, p["drows"])
+        self.gauge_compass(y, x + lw, gh, sw, p["drows"])
         y += gh
         self.tile_here(y, x, p["here"], lw)
         self.tile_grid(y, x + lw, p["here"], sw)
         y += p["here"]
-        self.tile_signal(y, x, p["signal"], g1)
-        self.tile_er(y, x + g1, p["signal"], w - g1)
-        y += p["signal"]
+        self.tile_waypoint(y, x, p["mid"], g1)
+        self.hits.append(("waypoint", y, x, p["mid"], g1))
+        self.tile_er(y, x + g1, p["mid"], w - g1)
+        y += p["mid"]
         self.cluster_alerts(y, x, p["alerts"], w, entry)
         self.hits.append(("alerts", y, x, p["alerts"], w))
         y += p["alerts"]
-        self.box_weather(y, x, p["weather"], lw, entry, title="WEATHER", spacer=True)
-        self.hits.append(("weather", y, x, p["weather"], lw))
-        self.box_status(y, x + lw, p["weather"], sw)
+        self.tile_radio(y, x, p["bottom"], g1)
+        self.tile_weather(y, x + g1, p["bottom"], lw - g1, entry)
+        self.hits.append(("weather", y, x + g1, p["bottom"], lw - g1))
+        self.box_status(y, x + lw, p["bottom"], sw)
 
     # ------------------------------------------------------------ helpers --
     def big_number(self, y, x, text, spec, rows, maxw):
         """Big digits at (y, x); smaller digits if they'd overflow maxw. Returns the
         column just past them, and the rows actually used."""
-        for r in (rows, 4):
+        for t, r in ((text, rows), (text.replace(",", ""), rows), (text, 4), (text.replace(",", ""), 4)):
             if r > rows:
                 continue
-            lines = digit_rows(text, r)
+            lines = digit_rows(t, r)
             if len(lines[0]) <= maxw:
                 for i, line in enumerate(lines):
                     self.put(y + i, x, line, spec)
@@ -161,8 +184,8 @@ class Cluster(object):
 
     # ------------------------------------------------------------- gauges --
     def gauge_speed(self, y, x, h, w, drows):
-        g = self.g
-        dot = " %s " % g["dot"]
+        """Speed in big digits; the trip in two lines under it."""
+        dot = " %s " % self.g["dot"]
         fix = self.fix if self.follow else None
         gps = fix is not None and fix.source == "gps" and fix.speed_mph is not None
         t = self.trip if self.follow else None
@@ -170,113 +193,52 @@ class Cluster(object):
         num = None
         if gps:
             num = "%d" % round(fix.speed_mph)
-            if fix.course is not None and fix.speed_mph >= 3:
-                arrow = "↑↗→↘↓↙←↖"[int((fix.course % 360) / 45 + 0.5) % 8] + " "
-                side.append([(arrow + views.compass(fix.course), "title"),
-                             (" %d%s" % (round(fix.course) % 360, g["deg"]), "label")])
-            elif t and t.get("stopped_at") and fix.speed_mph < 2:
-                side.append([("stopped ", "label"),
-                             (views.ago(time.time() - t["stopped_at"]).replace(" ago", ""), "value")])
-            else:
-                side.append([])
-            side.append([])
+            if t and t.get("stopped_at") and fix.speed_mph < 2:
+                side.append([("stopped", "label")])
+                side.append([(fmt_dur(time.time() - t["stopped_at"]), "value")])
         else:
             line2 = [(self.no_speed_reason(fix), "label")]
         if t and t.get("start") and (t["km"] >= 0.1 or t["moving"] >= 60):
             mi = t["km"] / 1.609344
-            side.append([("TRIP  ", "label"), ("%.1f mi" % mi, "title")])
-            mv = [(fmt_dur(t["moving"]), "value"), (" moving", "label")]
+            line1 = [("trip ", "label"), ("%.1f mi" % mi, "title"), (dot, "label"),
+                     (fmt_dur(t["moving"]), "value"), (" moving", "label")]
             if t["stopped"] >= 60:
-                mv += [(dot.rstrip() + " " + fmt_dur(t["stopped"]), "value"), (" stopped", "label")]
-            side.append(mv)
+                line1 += [(dot, "label"), (fmt_dur(t["stopped"]), "value"), (" stopped", "label")]
+            line1 = first_fit([line1, line1[:5]], w - 5)
             hrs = t["moving"] / 3600.0
             # average moving speed (never above the top speed: early on, a few fixes skew it)
             avg_mph = min(mi / hrs, t["top"]) if t["moving"] >= 60 else None
-            avg = [("avg ", "label"), ("%d" % round(avg_mph) if avg_mph is not None else "-", "value"),
-                   (dot + "top ", "label"), ("%d" % round(t["top"]), "value")]
-            side.append(avg)
-            s_lat, s_lon, _ = t["start"]
-            vl = self.view_loc()
-            when = time.strftime("%I:%M %p", time.localtime(t["t0"])).lstrip("0") if t.get("t0") else ""
-            km = geo.km_between(vl["lat"], vl["lon"], s_lat, s_lon) if vl else 0
-            if km >= 0.8:
-                line1 = [("started ", "label"), ("%d mi %s" % (max(1, round(km / 1.609344)), geo.compass(
-                    geo.bearing(vl["lat"], vl["lon"], s_lat, s_lon))), "value")]
-            else:
-                line1 = [("started near here", "label")]
-            if when:
-                line1.append((" at %s" % when, "label"))
+            line2 = [("avg ", "label"), ("%d" % round(avg_mph) if avg_mph is not None else "-", "value"),
+                     (dot + "top ", "label"), ("%d mph" % round(t["top"]), "value")]
+            if t.get("t0"):
+                when = time.strftime("%I:%M %p", time.localtime(t["t0"])).lstrip("0")
+                line2 = first_fit([line2 + [(dot + "since ", "label"), (when, "value")], line2], w - 5)
         elif gps:
-            side += [[("TRIP", "label")], [("Starts when the vehicle moves", "label")]]
+            line1 = [("Trip starts when the vehicle moves", "label")]
         self.gauge(y, x, h, w, "SPEED", "where", num, "title", "mph", side, line1, line2, drows)
 
-    def gauge_grade(self, y, x, h, w, drows):
-        fix = self.fix if self.follow else None
-        gps = fix is not None and fix.source == "gps"
-        terrain = self.terrain() if gps else None
-        gr = terrain["grade"] if terrain else None
-        drop = terrain["drop_ft"] if terrain else None
-        long_desc = drop is not None and drop >= DESCENT_FT
-        spec, num, side, line2 = "where", None, [], []
-        if gr is not None:
-            a = abs(gr)
-            spec = "err" if a >= GRADE_VERY or long_desc else "warn" if a >= GRADE_STEEP else "where"
-            num = "%d" % round(a)
-            if a < 2:
-                side.append([("level", "value")])
-            else:
-                up = gr > 0
-                mark = "▲ " if up else "▼ "
-                side.append([(mark + ("climbing" if up else "descending"),
-                              spec if spec != "where" else "value")])
-            side.append([])
-            if terrain.get("mile_ft") is not None:
-                side.append([("last mile ", "label"), ("%+d ft" % round(terrain["mile_ft"]), "value")])
-        if long_desc:
-            line2 = [("Long descent: -%s ft in 2 mi. Use a lower gear." % "{:,}".format(int(drop)), "err")]
-        elif gps and fix.mode == 2:
-            line2 = [("2D fix. Elevation and grade are unreliable.", "warn")]
-        elif not gps:
-            line2 = [(self.no_speed_reason(fix),
-                      "label")]
-        elif gr is None:
-            line2 = [("Calculating. Needs more distance.", "label")]
-        # a fixed -12% .. +12% scale, like a real gauge
-        line1 = self.grade_bar(gr, w - 5, spec)
-        self.gauge(y, x, h, w, "GRADE", spec, num, spec if spec != "where" else "title", "%",
-                   side, line1, line2, drows)
-
-    def grade_bar(self, gr, width, spec):
-        track_w = max(10, width - 10)
-        if track_w % 2 == 0:
-            track_w -= 1
-        half = track_w // 2
-        cells = ["━"] * track_w
-        cells[half] = "┃"
-        parts = [("-12 ", "label")]
-        if gr is None:
-            parts.append(("".join(cells), "line"))
-        else:
-            pos = half + int(round(max(-12.0, min(12.0, gr)) / 12.0 * half))
-            parts += [("".join(cells[:pos]), "line"), ("●", spec if spec != "where" else "title"),
-                      ("".join(cells[pos + 1:]), "line")]
-        parts.append((" +12", "label"))
-        return parts
-
     def gauge_elev(self, y, x, h, w, drows):
-        g = self.g
+        """Elevation in big digits. Under it: the grade, then the trip's climb and descent.
+        The border is the steep-road light: amber at 6%, red at 10% or on a long descent."""
+        dot = " %s " % self.g["dot"]
         fix = self.fix if self.follow else None
         gps = fix is not None and fix.source == "gps"
         terrain = self.terrain() if gps else None
         t = self.trip if self.follow else None
-        spec, num, line1, line2 = "where", None, [], []
+        spec, num, side, line1, line2 = "where", None, [], [], []
         alt = terrain["alt_ft"] if terrain else \
             fix.alt_m * locate.M_TO_FT if gps and fix.alt_m is not None else None
+        gr = terrain["grade"] if terrain else None
+        drop = terrain["drop_ft"] if terrain else None
+        long_desc = drop is not None and drop >= DESCENT_FT
+        if gr is not None:
+            a = abs(gr)
+            spec = "err" if a >= GRADE_VERY or long_desc else "warn" if a >= GRADE_STEEP else "where"
         if alt is not None:
             num = "{:,}".format(int(round(alt)))
             if gps and fix.mode == 2:
                 spec = "warn"
-                line2 = [("2D fix. Elevation is unreliable.", "warn")]
+                line2 = [("2D fix: elevation is unreliable", "warn")]
         else:
             vl = self.view_loc()
             elev = (self.store.entry(vl).get("hourly") or {}).get("elev_ft") if vl else None
@@ -284,25 +246,64 @@ class Cluster(object):
                 num = "{:,}".format(int(elev))
                 line1 = [("Forecast-grid elevation, not measured", "label")]
                 if self.follow:
-                    line2 = [("Connect a GPS for measured elevation", "label")]
-        if terrain:
-            spark = terrain["spark"]
-            if len(spark) >= 8 and terrain["span_km"] >= 1.0:
-                lo, hi = min(ft for _, ft in spark), max(ft for _, ft in spark)
-                line1 = [(self.sparkline([ft for _, ft in spark], 12), "now"),
-                         ("  last %d mi: %s-%s ft" % (max(1, round(terrain["span_km"] / 1.609)),
-                                                      "{:,}".format(int(lo)), "{:,}".format(int(hi))),
-                          "label")]
+                    line2 = [("Connect a GPS to measure it", "label")]
+        if gr is not None and not line2:
+            a = abs(gr)
+            gspec = spec if spec != "where" else "value"
+            if a < 2:
+                line1 = [("level road", "value")]
+            else:
+                line1 = [("%s %d%% %s" % ("▲" if gr > 0 else "▼", round(a),
+                                          "climbing" if gr > 0 else "descending"), gspec)]
+            if terrain.get("mile_ft") is not None:
+                line1 = first_fit([line1 + [(dot + "last mile ", "label"),
+                                            ("%+d ft" % round(terrain["mile_ft"]), "value")], line1], w - 5)
+            if long_desc:
+                line1 = [("▼ long descent: %s ft in 2 mi" % "{:,}".format(int(drop)), "err")]
+                line2 = [("Use a lower gear to save the brakes", "err")]
+        elif gps and alt is not None and not line1:
+            line1 = [("Grade needs more distance", "label")]
         if t and (t["up_m"] or t["down_m"]) and not line2:
             up, dn = t["up_m"] * locate.M_TO_FT, t["down_m"] * locate.M_TO_FT
-            line2 = [("trip: ", "label"), ("↑ " + "{:,} ft".format(int(round(up))), "value"),
-                     (" climbed %s " % g["dot"], "label"),
-                     ("↓ " + "{:,} ft".format(int(round(dn))), "value"), (" descended", "label")]
+            line2 = [("trip ", "label"), ("▲ " + "{:,} ft".format(int(round(up))), "value"),
+                     ("  ", "label"), ("▼ " + "{:,} ft".format(int(round(dn))), "value")]
+        if terrain:                                   # the shape of the last few miles, if room
+            spark = terrain["spark"]
+            if len(spark) >= 8 and terrain["span_km"] >= 1.0:
+                side = [[(self.sparkline([ft for _, ft in spark], 12), "now")],
+                        [("last %d mi" % max(1, round(terrain["span_km"] / 1.609)), "label")]]
         if num is None and not line2:
-            line2 = [(self.no_speed_reason(fix),
-                      "label")]
+            line2 = [(self.no_speed_reason(fix), "label")]
         self.gauge(y, x, h, w, "ELEV", spec, num, spec if spec != "where" else "title", "ft",
-                   [], line1, line2, drows)
+                   side, line1, line2, drows)
+
+    def gauge_compass(self, y, x, h, w, drows):
+        """Heading as big letters (N, NE...) with the degrees beside them. GPS heading is
+        noise at walking pace, so when stopped it keeps the last heading, dimmed."""
+        fix = self.fix if self.follow else None
+        gps = fix is not None and fix.source == "gps"
+        t = self.trip if self.follow else None
+        last = t.get("heading") if t else None
+        moving = gps and fix.course is not None and (fix.speed_mph or 0) >= 3
+        course = fix.course if moving else last[0] if last else None
+        side, line1, line2, num, numspec = [], [], [], None, "title"
+        if course is not None:
+            num = COMPASS8[int((course % 360) / 45 + 0.5) % 8]
+            arrow = "↑↗→↘↓↙←↖"[int((course % 360) / 45 + 0.5) % 8]
+            deg = "%d%s" % (round(course) % 360, self.g["deg"])
+            side = [[(arrow + " " + deg, "title" if moving else "label")]]
+            if geo.compass(course) != num:                # NNW, ENE...: the finer point
+                side.append([(geo.compass(course), "value" if moving else "label")])
+            if not moving:
+                numspec = "dim"
+                line2 = [("Stopped. Last heading shown.", "label")]
+            else:
+                line2 = [("GPS heading, true north", "label")]
+        elif gps:
+            line2 = [("Heading appears once moving", "label")]
+        else:
+            line2 = [(self.no_speed_reason(fix), "label")]
+        self.gauge(y, x, h, w, "COMPASS", "where", num, numspec, "", side, line1, line2, drows)
 
     # -------------------------------------------------------------- tiles --
     def tile_here(self, y, x, h, w):
@@ -368,11 +369,44 @@ class Cluster(object):
             text = "Picked location"
         self.put(y + 3, x + 2, text[:iw], "label")
 
-    def tile_signal(self, y, x, h, w):
-        spec, line1, line2 = self.signal_state()
-        self.box(y, x, h, w, "SIGNAL", spec)
-        self.runs(y + 1, x + 2, line1, w - 4)
-        self.put(y + 2, x + 2, line2[: w - 4], "label")
+    def tile_waypoint(self, y, x, h, w):
+        """Distance and direction to the chosen waypoint (tap to choose another)."""
+        g = self.g
+        name, target, note = self.waypoint_target()
+        here = self.view_loc() if self.follow else None
+        self.box(y, x, h, w, "WAYPOINT", "where", "tap to change" if w >= 40 else None, "dim")
+        iw = w - 4
+        if target is None:
+            self.runs(y + 1, x + 2, [(name, "value")], iw)
+            if h > 3:
+                self.put(y + 2, x + 2, note[:iw], "label")
+            return
+        if not here:
+            self.runs(y + 1, x + 2, [("—  ", "dim"), (name, "value")], iw)
+            if h > 3:
+                self.put(y + 2, x + 2, ("Needs a GPS position" if self.follow
+                                        else "Follow mode is off. Tap FOLLOW GPS.")[:iw], "label")
+            return
+        km = geo.km_between(here["lat"], here["lon"], target[0], target[1])
+        mi = km / 1.609344
+        if km < 0.1:
+            where = [("here", "title")]
+        else:
+            brg = geo.bearing(here["lat"], here["lon"], target[0], target[1])
+            arrow = "↑↗→↘↓↙←↖"[int((brg % 360) / 45 + 0.5) % 8]
+            dist = ("%.1f mi" % mi) if mi < 10 else ("%d mi" % round(mi))
+            where = [(arrow + " ", "title"), (g["approx"] + dist + " " + geo.compass(brg), "title")]
+        self.runs(y + 1, x + 2, where + [("   ", "label"), (name, "value")], iw)
+        if h > 3:
+            self.put(y + 2, x + 2, ("Straight line" + (" %s %s" % (g["dot"], note) if note else ""))[:iw],
+                     "label")
+
+    def tile_radio(self, y, x, h, w):
+        """The scanner feed's spot. Until the radio helper exists, it says so."""
+        self.box(y, x, h, w, "RADIO", "line")
+        self.put(y + 1, x + 2, "Not connected yet"[: w - 4], "label")
+        if h > 3:
+            self.put(y + 2, x + 2, "Scanner calls will appear here."[: w - 4], "dim")
 
     def tile_er(self, y, x, h, w):
         vl = self.view_loc()
@@ -486,6 +520,17 @@ class Cluster(object):
                 self.runs(y + 1 + i, lx, parts, lw - len(source) - 2)
             else:
                 self.runs(y + 1 + i, lx, parts, lw)
+
+
+COMPASS8 = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def first_fit(candidates, width):
+    """The first list of (text, spec) parts that fits in width (or the last one)."""
+    for parts in candidates:
+        if sum(len(p[0]) for p in parts) <= width:
+            return parts
+    return candidates[-1]
 
 
 def fmt_dur(sec):

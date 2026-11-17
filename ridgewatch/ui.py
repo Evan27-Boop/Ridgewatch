@@ -29,7 +29,7 @@ CLIMB_STEP_M = 3.0                  # elevation must move this much to count (GP
 
 def new_trip():
     return {"km": 0.0, "moving": 0.0, "stopped": 0.0, "top": 0.0, "start": None, "t0": None,
-            "last": None, "crumbs": [], "stopped_at": None,
+            "last": None, "crumbs": [], "stopped_at": None, "heading": None,
             "up_m": 0.0, "down_m": 0.0, "anchor": None, "alts": []}
 
 
@@ -125,6 +125,8 @@ class UI(Panels):
         self.beeps = []
         self.status_seen = {}                   # DATA LINK / GPS word last beeped about
         self.save_target = None
+        self.waypoint = {"kind": "start"}       # where WAYPOINT points: start, signal or place
+        self.wpick = None
         for note in store.notes:
             self.flash(note, "warn", 8)
         if store.config.get("follow"):
@@ -223,6 +225,8 @@ class UI(Panels):
             return
         spd = fix.speed_mph or 0.0
         t["top"] = max(t["top"], spd)
+        if fix.course is not None and spd >= 3:
+            t["heading"] = (fix.course, fix.time)   # kept for the compass while stopped
         if spd < 2:
             t["stopped_at"] = t["stopped_at"] or fix.time
         else:
@@ -450,7 +454,7 @@ class UI(Panels):
     def moving_guard(self, now):
         """While moving, a detail screen or list goes back to the gauges after
         MOVING_RETURN_SEC without a tap or key, so the gauges are never hidden for long."""
-        if self.driving and self.mode in ("alerts", "rain", "pick", "save") and \
+        if self.driving and self.mode in ("alerts", "rain", "pick", "save", "wpick") and \
                 (self.view_loc() or self.follow) and now - self.last_key > MOVING_RETURN_SEC:
             self.mode = "main"
             self.dirty = True
@@ -727,32 +731,75 @@ class UI(Panels):
             return "LIMITED", "warn", "NWS is returning errors"
         return "ONLINE", "ok", "Last reply %s" % views.ago(now - L["ok"])
 
-    def signal_state(self, now=None):
-        """(border spec, [(text, spec)...] first line, second line) for the SIGNAL tile:
-        while offline, how far and which way back to the last place with internet."""
-        now = time.time() if now is None else now
-        g = self.g
-        if not self.follow:
-            return "where", [("—", "dim")], "Follow mode is off"
-        word = self.link_state(now)[0]
-        if word == "STANDBY":
-            return "where", [("—", "dim")], "No GPS position"
-        if word == "CHECKING":
-            return "where", [("Checking", "label")], ""
-        if word in ("ONLINE", "LIMITED"):
-            return "where", [("● ", "ok"), ("online", "ok")], \
-                "Tracks the last point with a connection"
+    def last_online_text(self, now=None):
+        """'Last online ≈2.3 mi NE' while offline in follow mode (the way back to signal)."""
+        if not self.follow or self.link_state(now)[0] not in ("OFFLINE", "STALE"):
+            return ""
         spot, here = self.signal_spot, self.view_loc()
         if not spot or not here:
-            return "warn", [("offline", "warn")], "No connection point recorded yet"
+            return "No connection point recorded yet"
         km = geo.km_between(here["lat"], here["lon"], spot[0], spot[1])
         if km < 0.3:
-            where = "At this position"
-        else:
-            where = "%s%.1f mi %s" % (g["approx"], km / 1.609344,
-                                      geo.compass(geo.bearing(here["lat"], here["lon"], spot[0], spot[1])))
-        return "warn", [(where, "warn"), ("   last online %s" % views.ago(now - spot[2]), "label")], \
-            "Last point with a connection"
+            return "Last online at this position"
+        return "Last online %s%.1f mi %s" % (self.g["approx"], km / 1.609344, geo.compass(
+            geo.bearing(here["lat"], here["lon"], spot[0], spot[1])))
+
+    # -------------------------------------------------------- waypoint --
+    def waypoint_target(self):
+        """(name, (lat, lon) or None, note) for the WAYPOINT tile."""
+        wp = self.waypoint
+        if wp["kind"] == "signal":
+            spot = self.signal_spot
+            if not spot:
+                return "Last spot with internet", None, "No connection recorded on this trip yet"
+            return "Last spot with internet", spot[:2], "online %s" % views.ago(time.time() - spot[2])
+        if wp["kind"] == "place":
+            return wp["name"], (wp["lat"], wp["lon"]), "saved place"
+        t = self.trip if self.follow else None
+        if not self.follow:
+            return "Trip start", None, "Set when you follow the GPS"
+        if not t or not t.get("start"):
+            return "Trip start", None, "Set by the first GPS position"
+        when = time.strftime("%I:%M %p", time.localtime(t["t0"])).lstrip("0") if t.get("t0") else ""
+        return "Trip start", t["start"][:2], ("started %s" % when) if when else ""
+
+    def open_wpick(self):
+        items = [("start", "Trip start", "where following the GPS began"),
+                 ("signal", "Last spot with internet", "where a reply last came through")]
+        for l in self.store.config["locations"]:
+            items.append(("place", l, "saved place"))
+        cur = self.waypoint
+        sel = 0
+        for i, (kind, val, _) in enumerate(items):
+            if kind == cur["kind"] and (kind != "place" or (val["lat"], val["lon"]) ==
+                                        (cur.get("lat"), cur.get("lon"))):
+                sel = i
+        self.wpick = {"items": items, "sel": sel, "top": 0}
+        self.mode = "wpick"
+
+    def key_wpick(self, k):
+        p = self.wpick
+        n = len(p["items"])
+        if k == "quit":
+            return "quit"
+        if k in ("esc", "q", "Q", "backspace"):
+            self.mode = "main"
+        elif k in ("up", "down", "pgup", "pgdn", "home", "end"):
+            page = p.get("page") or 8
+            step = {"up": -1, "down": 1, "pgup": -page, "pgdn": page, "home": -n, "end": n}[k]
+            p["sel"] = max(0, min(n - 1, p["sel"] + step))
+        elif k == "enter" and n:
+            kind, val, _ = p["items"][p["sel"]]
+            if kind == "place":
+                self.waypoint = {"kind": "place", "name": val["name"], "lat": val["lat"],
+                                 "lon": val["lon"]}
+                name = val["name"]
+            else:
+                self.waypoint = {"kind": kind}
+                name = "the trip start" if kind == "start" else "the last spot with internet"
+            self.flash("Waypoint set to %s" % name)
+            self.mode = "main"
+        return None
 
     def gps_state(self):
         """(word, color spec, detail) for the GPS box."""
@@ -850,12 +897,16 @@ class UI(Panels):
         if self.mode == "main":
             for name, ty, tx, th, tw in self.hits:
                 if self._inside(y, x, ty, tx, th, tw):
+                    if name == "waypoint":
+                        self.open_wpick()
+                        return None
                     return self.key_main({"alerts": "a", "weather": "p"}[name])
-        elif self.mode == "pick":
+        elif self.mode in ("pick", "wpick"):
+            lst = self.pick if self.mode == "pick" else self.wpick
             for ry, rx, rw, i in self.pick_rows:
                 if self._inside(y, x, ry, rx, 2, rw):
-                    self.pick["sel"] = i
-                    return self.key_pick("enter")
+                    lst["sel"] = i
+                    return getattr(self, "key_" + self.mode)("enter")
         elif self.mode in ("alerts", "rain"):
             return None                          # reading: taps on the text do nothing
         return None

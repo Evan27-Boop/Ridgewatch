@@ -466,19 +466,42 @@ class Cluster(unittest.TestCase):
         self.assertAlmostEqual(t["up_m"], 100, delta=6)
         self.assertAlmostEqual(t["down_m"], 40, delta=6)
 
-    def test_signal_points_back_to_the_last_contact(self):
+    def test_data_link_points_back_to_the_last_contact(self):
         here = {"lat": 34.75, "lon": -82.78}
         st = types.SimpleNamespace(follow=True, g=UNI, signal_spot=(34.70, -82.78, time.time() - 600),
                                    view_loc=lambda: here, link_state=lambda now=None: ("OFFLINE", "err", ""))
-        spec, line1, line2 = ui.UI.signal_state(st)
-        self.assertEqual(spec, "warn")
-        self.assertIn("3.5 mi S", line1[0][0])                   # 0.05 degrees of latitude
-        self.assertIn("10m ago", line1[1][0])
+        self.assertEqual(ui.UI.last_online_text(st), "Last online \u22483.5 mi S")  # 0.05 deg of latitude
         st.link_state = lambda now=None: ("ONLINE", "ok", "")
-        self.assertIn("online", "".join(p[0] for p in ui.UI.signal_state(st)[1]))
+        self.assertEqual(ui.UI.last_online_text(st), "")         # online: nothing to say
         st.link_state = lambda now=None: ("OFFLINE", "err", "")
         st.signal_spot = None
-        self.assertIn("offline", ui.UI.signal_state(st)[1][0][0])
+        self.assertEqual(ui.UI.last_online_text(st), "No connection point recorded yet")
+
+    def test_waypoint_targets(self):
+        now = time.time()
+        trip = ui.new_trip()
+        st = types.SimpleNamespace(follow=True, trip=trip, waypoint={"kind": "start"},
+                                   signal_spot=None)
+        self.assertIsNone(ui.UI.waypoint_target(st)[1])          # no position yet
+        trip["start"], trip["t0"] = (34.70, -82.80, "Six Mile, SC"), now
+        name, target, note = ui.UI.waypoint_target(st)
+        self.assertEqual((name, target), ("Trip start", (34.70, -82.80)))
+        self.assertTrue(note.startswith("started "))
+        st.waypoint = {"kind": "signal"}
+        self.assertIsNone(ui.UI.waypoint_target(st)[1])
+        st.signal_spot = (34.71, -82.81, now - 300)
+        self.assertEqual(ui.UI.waypoint_target(st)[1], (34.71, -82.81))
+        st.waypoint = {"kind": "place", "name": "Camp", "lat": 35.0, "lon": -82.9}
+        self.assertEqual(ui.UI.waypoint_target(st)[:2], ("Camp", (35.0, -82.9)))
+
+    def test_compass_letters(self):
+        from ridgewatch.cluster import digit_rows
+        for rows in (6, 4):
+            for word in ("N", "NE", "E", "SE", "S", "SW", "W", "NW"):
+                lines = digit_rows(word, rows)
+                self.assertEqual(len(lines), rows, word)
+                self.assertEqual(len(set(len(l) for l in lines)), 1, word)   # a clean block
+                self.assertTrue(any(c != " " for c in "".join(lines)), word)
 
     def test_old_station_reading_gives_way_to_the_forecast(self):
         now = time.time()
@@ -853,8 +876,8 @@ class Dashboard(unittest.TestCase):
     def test_gauge_cluster(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"])
         self.assertEqual((code, crashed), (0, False))
-        for tile in ("SPEED", "GRADE", "ELEV", "HERE", "GRID", "SIGNAL", "ER", "ALERTS",
-                     "WEATHER", "DATA LINK", "GPS", "RIDGEWATCH"):
+        for tile in ("SPEED", "ELEV", "COMPASS", "HERE", "GRID", "WAYPOINT", "ER", "ALERTS",
+                     "RADIO", "WEATHER", "DATA LINK", "GPS", "RIDGEWATCH"):
             self.assertIn(" %s " % tile, out, tile)
         self.assertIn("Oconee Memorial", out)
 

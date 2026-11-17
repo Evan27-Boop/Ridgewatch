@@ -26,12 +26,15 @@ will also show police and fire radio calls as text.
 1. **Official weather warnings.** NWS alerts over you and on the road ahead, with a
    master warning light and a beep for new warnings.
 2. **Where am I.** A position you can read to a 911 dispatcher: nearest town, county,
-   map grid, nearest emergency room, and the way back to where the internet last worked.
-3. **Gauges.** Speed, grade and elevation in big digits, plus trip totals. Fixed spots,
-   fixed scales, and a border color that acts as the warning light.
+   map grid, nearest emergency room. A waypoint: distance and direction back to where
+   the trip started, a saved place, or where the internet last worked.
+3. **Gauges.** Speed (with trip totals), elevation (with the grade and a long-descent
+   warning) and compass heading in big type. Fixed spots, and a border color that acts
+   as the warning light.
 4. **Hazards nearby.** Wildfires (NIFC) and road incidents (state 511 feeds, with your
    own key).
-5. **Weather.** Current conditions, the next 24 hours, rain outlook, daylight left.
+5. **Weather.** A short text tile: conditions now, high and low, when rain starts,
+   daylight left. The 24-hour graphs are one tap away.
 6. **Honesty about staleness.** Every reading shows its age. Old data is labeled, never
    shown as current and never silently dropped.
 7. **Touch first.** Tap a tile to open its details, and a bar of large buttons along
@@ -41,7 +44,8 @@ will also show police and fire radio calls as text.
    the day and night looks. When outside power is lost (ignition off), it shuts down
    cleanly after 10 minutes unless power comes back or you tap KEEP RUNNING.
 9. **Radio (planned, not built).** A separate helper program turns scanner calls into
-   text and hands them to a RADIO tile. Built only after the core is field-tested.
+   text and hands them to the RADIO tile, which holds its place on screen until then.
+   Built only after the core is field-tested.
 
 ## What it will never do
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.3.0 (2026-11-17): new tiles
+
+- **Top row: SPEED, ELEV, COMPASS.** The GRADE tile is gone; the grade is a line in ELEV,
+  and ELEV's border is the steep-road light (amber at 6%, red at 10% or on a long
+  descent, with "use a lower gear"). Big digits drop the comma before shrinking, so
+  4-digit elevations stay full size.
+- **COMPASS:** heading in big letters (N, NE, E...) with degrees and the finer point
+  (NNW) beside it. While stopped it keeps the last heading, dimmed.
+- **WAYPOINT** replaces SIGNAL: distance and direction back to the trip start, or tap it
+  to choose a saved place or the last spot with internet.
+- **DATA LINK** shows the way back to the last spot with internet while offline (the job
+  SIGNAL used to do).
+- **RADIO** has its spot on screen, marked "Not connected yet" until the radio helper.
+- **WEATHER** is a short text tile: now, wind, high and low, rain, sunset. Tap it for the
+  24-hour temperature and rain graphs together.
+- SPEED's trip numbers are two lines under the digits; heading moved to COMPASS.
+
 ## 3.2.0 (2026-11-17): power and brightness
 
 - **Clean shutdown on power loss.** When outside power goes away (ignition off), a beep
