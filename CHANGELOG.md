@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.2 (2026-11-17)
+
+- Volume keys move 10% a press (was 5%).
+
 ## 3.4.1 (2026-11-17)
 
 - **Volume buttons and keys work** under cage: the tablet's buttons and the keyboard's

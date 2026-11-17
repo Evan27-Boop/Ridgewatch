@@ -1,4 +1,4 @@
-# Ridgewatch 3.4.1
+# Ridgewatch 3.4.2
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.

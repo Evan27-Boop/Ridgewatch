@@ -932,7 +932,7 @@ class VolumeKeys(unittest.TestCase):
         self.assertEqual((v.control, v.level, v.on), ("Speaker", 50, True))   # raised and unmuted
         v.press(volume.KEY_VOLUMEUP)
         v.press(volume.KEY_MUTE)
-        self.assertEqual(said, [(55, True), (55, False)])
+        self.assertEqual(said, [(60, True), (60, False)])          # 10% a press
         v.press(volume.KEY_VOLUMEDOWN)
         self.assertEqual(said[-1], (50, False))           # down doesn't unmute; up does
         st2 = {"control": "Master", "pct": 80, "on": True, "calls": []}
@@ -970,7 +970,7 @@ class VolumeKeys(unittest.TestCase):
             if said:
                 break
             time.sleep(0.05)
-        self.assertEqual(said, [(65, True)])
+        self.assertEqual(said, [(70, True)])
 
 
 class EndToEnd(unittest.TestCase):

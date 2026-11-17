@@ -21,7 +21,7 @@ import time
 KEY_MUTE, KEY_VOLUMEDOWN, KEY_VOLUMEUP = 113, 114, 115
 EV_KEY = 1
 EVENT = struct.Struct("llHHi")            # struct input_event: time, type, code, value
-STEP = 5                                  # percent per press
+STEP = 10                                 # percent per press
 CONTROLS = ("Master", "Speaker", "PCM")   # the first one the sound card has
 
 
