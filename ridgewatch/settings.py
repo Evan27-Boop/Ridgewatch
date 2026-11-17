@@ -81,6 +81,9 @@ class Store(object):
             c["display"] = "auto"
         c["wildfires"] = bool(c.get("wildfires", True))
         c["max_volume"] = bool(c.get("max_volume", True))     # turn the speakers all the way up
+        ap = c.get("airports", ["GSP", "CLT", "ATL"])          # flights: your airports
+        c["airports"] = [str(a).strip().upper() for a in ap if str(a).strip()][:6] \
+            if isinstance(ap, list) else ["GSP", "CLT", "ATL"]
         # screen brightness (percent) for each look; False leaves the backlight alone
         bright = c.get("brightness", {}) if c.get("brightness", {}) is not False else False
         if bright is not False:

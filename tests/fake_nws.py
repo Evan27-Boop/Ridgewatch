@@ -14,6 +14,12 @@ It also fakes the other official feeds (RIDGEWATCH_FEEDS=fake.url):
   {"fires": [[lat, lon, "Name", acres, pct_contained], ...]}   /wfigs
   {"roads": [[lat, lon, "I-85", "Northbound", "crash", "2 Right Lanes"], ...]}
                                                           /511ga and /drivenc
+  {"lsr": [[lat, lon, "TSTM WND DMG", "TREES DOWN ON SC-183", minutes_ago], ...]}
+                                                          /products (NWS storm reports)
+  {"ipaws": [["EVI", "045077", "Evacuation order for ..."], ...]}   /ipaws/feed, /ipaws/eas/N
+  {"outages": [[lat, lon, customers], ...]}               /duke
+  {"quakes": [[lat, lon, mag, "place", minutes_ago], ...]}  /usgs
+  {"faa_stops": ["ATL", "CLT", ...]}                       /faa
 """
 
 import gzip
@@ -184,6 +190,84 @@ def road_events(mode, now=None):
     return out
 
 
+def lsr_text(reports, now=None):
+    """A Local Storm Report product in the NWS fixed-column layout (times in EST)."""
+    now = time.time() if now is None else now
+    head = datetime.fromtimestamp(now, EST)
+    lines = ["000", "NWUS52 KGSP", "LSRGSP", "", "PRELIMINARY LOCAL STORM REPORT",
+             "NATIONAL WEATHER SERVICE GREENVILLE-SPARTANBURG SC",
+             head.strftime("%I%M %p EST %a %b %d %Y").lstrip("0").upper(), "",
+             "..TIME...   ...EVENT...      ...CITY LOCATION...     ...LAT.LON...",
+             "..DATE...   ....MAG....      ..COUNTY LOCATION..ST.. ...SOURCE....",
+             "            ..REMARKS..", ""]
+    for lat, lon, event, remarks, mins in reports:
+        t = datetime.fromtimestamp(now - mins * 60, EST)
+        lines.append("%-12s%-17s%-24s%5.2fN %5.2fW" % (t.strftime("%I%M %p"), event, "2 W PICKENS",
+                                                       lat, -lon))
+        lines.append("%-12s%-17s%-19s%-5s%s" % (t.strftime("%m/%d/%Y"), "", "PICKENS", "SC",
+                                               "PUBLIC"))
+        lines += ["", "            " + remarks, ""]
+    lines.append("&&")
+    return "\n".join(lines)
+
+
+def ipaws_feed(base, mode):
+    entries = "".join(
+        '<entry><title>%s</title><link href="%s/ipaws/eas/%d"/><id>%s/ipaws/eas/%d</id>'
+        '<updated>2026-11-17T10:00:00Z</updated><category term="%s" label="event"/>'
+        '<category term="%s" label="statefips"/></entry>' % (code, base, i, base, i, code, same[1:3])
+        for i, (code, same, text) in enumerate(mode.get("ipaws") or []))
+    return ('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">'
+            '<title>IPAWS EAS FEED</title>%s</feed>' % entries)
+
+
+def ipaws_cap(mode, i, now=None):
+    now = time.time() if now is None else now
+    code, same, text = (mode.get("ipaws") or [])[i]
+    exp = datetime.fromtimestamp(now + 3 * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S-00:00")
+    return ('<?xml version="1.0"?><alert xmlns="urn:oasis:names:tc:emergency:cap:1.2">'
+            '<identifier>FEMA-%d</identifier><sender>county-em@example.gov</sender>'
+            '<sent>2026-11-17T10:00:00-05:00</sent><status>Actual</status><msgType>Alert</msgType>'
+            '<info><language>en-US</language><event>%s</event>'
+            '<eventCode><valueName>SAME</valueName><value>%s</value></eventCode>'
+            '<urgency>Immediate</urgency><severity>Extreme</severity>'
+            '<expires>%s</expires><senderName>Pickens County Emergency Management</senderName>'
+            '<headline>%s</headline><description>%s</description>'
+            '<instruction>Leave now by US-178 north.</instruction>'
+            '<area><areaDesc>Pickens County</areaDesc>'
+            '<geocode><valueName>SAME</valueName><value>%s</value></geocode></area>'
+            '</info></alert>' % (i, code, code, exp, text, text, same))
+
+
+def duke(mode):
+    return {"features": [{"attributes": {"affected_customers": n, "start_time": "11/17/2026 1:40 PM",
+                                         "cause": "Weather", "crew_status": "Crew dispatched"},
+                          "geometry": {"x": lon, "y": lat}}
+                         for lat, lon, n in mode.get("outages") or []]}
+
+
+def usgs(mode, now=None):
+    now = time.time() if now is None else now
+    return {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "id": "us%d" % i,
+         "properties": {"mag": mag, "place": place, "time": int((now - mins * 60) * 1000),
+                        "alert": None, "tsunami": 0},
+         "geometry": {"type": "Point", "coordinates": [lon, lat, 10.0]}}
+        for i, (lat, lon, mag, place, mins) in enumerate(mode.get("quakes") or [])]}
+
+
+def faa_xml(mode):
+    stops = "".join("<Program><ARPT>%s</ARPT><Reason>equipment outage</Reason>"
+                    "<End_Time>4:30 pm EST</End_Time></Program>" % a
+                    for a in mode.get("faa_stops") or [])
+    return ('<AIRPORT_STATUS_INFORMATION><Update_Time>now</Update_Time>'
+            '<Delay_type><Name>Ground Stop Programs</Name><Ground_Stop_List>%s</Ground_Stop_List>'
+            '</Delay_type><Delay_type><Name>Airport Closures</Name><Airport_Closure_List>'
+            '<Airport><ARPT>LAS</ARPT><Reason>!LAS 11/123 LAS AD AP CLSD TO NON SKED TRANSIENT GA ACFT'
+            '</Reason><Start>Nov 17</Start><Reopen>Nov 18</Reopen></Airport></Airport_Closure_List>'
+            '</Delay_type></AIRPORT_STATUS_INFORMATION>' % stops)
+
+
 class FakeNWS(object):
     def __init__(self):
         self.mode = {}
@@ -201,6 +285,14 @@ class FakeNWS(object):
                 if "gzip" in (self.headers.get("Accept-Encoding") or ""):
                     body = gzip.compress(body)
                     self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def raw(self, code, text, ctype):
+                body = text.encode()
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
@@ -225,6 +317,23 @@ class FakeNWS(object):
                 mm = re.match(r"^/stations/(\w+)/observations/latest$", path)
                 if mm:
                     return self.reply(200, obs(mm.group(1), m))
+                if path == "/products/types/LSR/locations/GSP":
+                    graph = [{"id": "lsr-1", "issuanceTime": iso(time.time() - 300)}] \
+                        if m.get("lsr") else []
+                    return self.reply(200, {"@graph": graph})
+                if path == "/products/lsr-1":
+                    return self.reply(200, {"productText": lsr_text(m.get("lsr") or [])})
+                if path == "/ipaws/feed":
+                    return self.raw(200, ipaws_feed(base, m), "application/atom+xml")
+                mm = re.match(r"^/ipaws/eas/(\d+)$", path)
+                if mm:
+                    return self.raw(200, ipaws_cap(m, int(mm.group(1))), "application/xml")
+                if path.startswith("/duke?"):
+                    return self.reply(200, duke(m))
+                if path == "/usgs":
+                    return self.reply(200, usgs(m))
+                if path == "/faa":
+                    return self.raw(200, faa_xml(m), "application/xml")
                 if path.startswith("/wfigs?"):
                     return self.reply(200, fires(m))
                 if path.startswith(("/511ga?", "/drivenc?")):

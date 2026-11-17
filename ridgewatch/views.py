@@ -3,6 +3,7 @@ labels the dashboard and the text report display, plus which alerts are
 urgent enough to flash. No drawing here. Standard library only.
 """
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -329,21 +330,115 @@ def _mi(km):
     return max(1, int(round(km / 1.609344)))
 
 
-def build_reports(a, nearby, feed_cache, lat, lon, now=None):
+NWS_DO = {   # what to do, in a few words, for the warnings that need it
+    "Tornado Warning": "TAKE SHELTER NOW", "Tornado Watch": "be ready to shelter",
+    "Severe Thunderstorm Warning": "get indoors", "Severe Thunderstorm Watch": "watch the sky",
+    "Flash Flood Emergency": "GET TO HIGH GROUND", "Flash Flood Warning": "avoid low roads",
+    "Flood Warning": "avoid flooded roads", "Flood Advisory": "watch for water on roads",
+    "Flash Flood Watch": "watch for water on roads", "Flood Watch": "watch for water on roads",
+    "Winter Storm Warning": "avoid travel", "Ice Storm Warning": "avoid travel",
+    "Blizzard Warning": "avoid travel", "Winter Weather Advisory": "slow down",
+    "High Wind Warning": "watch for debris", "Wind Advisory": "watch for debris",
+    "Dense Fog Advisory": "slow down, low beams", "Extreme Heat Warning": "limit time outside",
+    "Heat Advisory": "limit time outside", "Red Flag Warning": "no outdoor fires",
+    "Hurricane Warning": "follow evacuation orders", "Tropical Storm Warning": "avoid travel",
+    "Extreme Wind Warning": "TAKE SHELTER NOW", "Dust Storm Warning": "pull off, lights off",
+}
+RESPONSE_DO = {"Shelter": "take shelter", "Evacuate": "EVACUATE", "Prepare": "be ready",
+               "Execute": "follow official orders", "Avoid": "avoid the area",
+               "Monitor": "stay alert"}
+
+LOCAL, NATIONAL = "local", "national"
+WARNING_SOUND, LOCAL_SOUND, NATIONAL_SOUND = "warning", "local", "national"
+
+
+def nws_do(it):
+    return NWS_DO.get(it.get("event") or "") or RESPONSE_DO.get(it.get("response") or "", "")
+
+
+def clock(t, now=None):
+    """Epoch -> '2:58 PM', with the weekday if it isn't today."""
     now = time.time() if now is None else now
+    lt = time.localtime(t)
+    s = time.strftime("%I:%M %p", lt).lstrip("0")
+    return s if time.strftime("%Y%m%d", lt) == time.strftime("%Y%m%d", time.localtime(now)) \
+        else s + time.strftime(" %a", lt)
+
+
+def _where(km, deg, ahead=False):
+    return "%d mi %s%s" % (_mi(km), geo.compass(deg), ", ahead" if ahead else "")
+
+
+def _row(**kw):
+    """One line of the ALERTS table. Keeps the older keys the text report uses."""
+    r = {"tier": "official", "sev": None, "detail": [], "km": None, "do": "", "scope": LOCAL,
+         "sound": LOCAL_SOUND, "item": {}}
+    r.update(kw)
+    r.setdefault("when", "")
+    return r
+
+
+def build_reports(a, nearby, feed_cache, lat, lon, now=None, ctx=None):
+    """Everything for the ALERTS table, worst first: local rows, then national ones.
+    Each row: what (kind), where, when, do, source, scope, sound, rank, id.
+    ctx: {"same": your county's SAME code, "statefips": "45", "airports": [...]}."""
+    now = time.time() if now is None else now
+    ctx = ctx or {}
     out = []
     for it in a.get("items") or []:                            # NWS, over you
-        out.append({"tier": "official", "kind": it["event"].upper(), "sev": it["severity"],
-                    "cat": "nws", "detail": [], "where": "here", "when": alert_when(it, now),
-                    "source": "NWS", "km": 0.0, "rank": 0, "id": it.get("id"), "item": it})
+        urgent = is_urgent(it)
+        out.append(_row(kind=it["event"].upper(), sev=it["severity"], cat="nws", where="here",
+                        when=alert_when(it, now), do=nws_do(it), source="NWS", km=0.0,
+                        rank=0 if urgent else 1, id=it.get("id"), item=it,
+                        sound=WARNING_SOUND if urgent else LOCAL_SOUND))
     for it in nearby or []:                                     # NWS, nearby or ahead
-        out.append({"tier": "official", "kind": it["event"].upper(), "sev": it["severity"],
-                    "cat": "nws", "detail": [],
-                    "where": ("%d mi ahead" % _mi(it["km"])) if it["ahead"] else
-                    "%d mi %s" % (_mi(it["km"]), it["dir"]),
-                    "when": alert_when(it, now), "source": "NWS", "km": it["km"],
-                    "rank": 1 if it["ahead"] else 1.5, "id": it.get("id"), "item": it})
+        out.append(_row(kind=it["event"].upper(), sev=it["severity"], cat="nws",
+                        where=("%d mi ahead" % _mi(it["km"])) if it["ahead"] else
+                        "%d mi %s" % (_mi(it["km"]), it["dir"]),
+                        when=alert_when(it, now), do=nws_do(it) if it["ahead"] else "",
+                        source="NWS", km=it["km"], rank=0.5 if it["ahead"] else 1.5,
+                        id=it.get("id"), item=it,
+                        sound=WARNING_SOUND if it["ahead"] else LOCAL_SOUND))
     fc = feed_cache or {}
+    for cid, cap in sorted(((fc.get("ipaws") or {}).get("alerts") or {}).items()):   # FEMA
+        if cap.get("skip") or cap.get("nws") or (cap.get("expires") and cap["expires"] < now):
+            continue
+        code = cap.get("code") or ""
+        name, do, urgent = feeds.IPAWS_KINDS.get(code, ((cap.get("event") or "ALERT").upper(),
+                                                        "follow official orders", False))
+        national = code == "EAN"
+        mine = any(geo.inside(lat, lon, r) for r in cap.get("polys") or []) or \
+            (ctx.get("same") and ctx["same"] in cap.get("same", [])) or \
+            ("0%s000" % ctx.get("statefips", "--")) in cap.get("same", [])
+        if not (mine or national):
+            continue
+        out.append(_row(kind=name, sev=cap.get("severity"), cat="ipaws",
+                        where="here" if mine else "nationwide",
+                        when=("until " + clock(cap["expires"], now)) if cap.get("expires") else "",
+                        do=do, source="FEMA", km=0.0, rank=0 if urgent else 1.2, id="ipaws-" + cid,
+                        item=dict(cap, text=cap.get("headline") or cap.get("description")),
+                        scope=NATIONAL if national and not mine else LOCAL,
+                        sound=WARNING_SOUND if urgent else LOCAL_SOUND))
+    for it in feeds.near(feeds.lsr_reports(fc.get("lsr"), now), lat, lon, feeds.LSR_SHOW_KM):
+        town = re.sub(r"^\d+(\.\d+)?\s+[NSEW]{1,3}\s+", "", it["place"])
+        out.append(_row(kind=it["kind"], cat="lsr", where="%d mi %s, near %s" % (
+                            _mi(it["km"]), it["dir"], town),
+                        when="reported " + clock(it["time"], now), do=it["do"], source="NWS",
+                        km=it["km"], rank=2, id=it["id"],
+                        item=dict(it, text=it["remarks"]),
+                        detail=[x for x in (it["mag"], it["source"]) if x]))
+    outs = feeds.near((fc.get("outages") or {}).get("items") or [], lat, lon, feeds.OUTAGE_MI * 1.61)
+    total = sum(o["n"] for o in outs)
+    if total >= feeds.OUTAGE_MIN:
+        first = min(outs, key=lambda o: o["km"])
+        out.append(_row(kind="POWER OUT", cat="power", where="{:,} customers within {} mi".format(
+                            total, feeds.OUTAGE_MI) + ", nearest %d mi %s" % (_mi(first["km"]),
+                                                                              first["dir"]),
+                        when="", do="signals may be out" if total >= 1000 else "",
+                        source="DUKE", km=first["km"], rank=2.2, id="duke-outage",
+                        item={"text": "%d outage%s; the largest has %s customers out." % (
+                            len(outs), "" if len(outs) == 1 else "s",
+                            "{:,}".format(max(o["n"] for o in outs)))}))
     for it in feeds.near((fc.get("fires") or {}).get("items") or [], lat, lon, feeds.FIRE_SHOW_KM):
         detail = [it["name"]]
         if it["acres"]:
@@ -351,11 +446,11 @@ def build_reports(a, nearby, feed_cache, lat, lon, now=None):
                           else "under 1 ac")
         if it["contained"] is not None:
             detail.append("%d%% contained" % it["contained"])
-        out.append({"tier": "official", "kind": "PRESCRIBED BURN" if it["rx"] else "WILDFIRE",
-                    "sev": None, "cat": "fire", "detail": detail,
-                    "where": "%d mi %s" % (_mi(it["km"]), it["dir"]),
-                    "when": ("found " + ago(now - it["found"])) if it["found"] else "",
-                    "source": "NIFC", "km": it["km"], "rank": 2, "id": it["id"], "item": it})
+        out.append(_row(kind="PRESCRIBED BURN" if it["rx"] else "WILDFIRE", cat="fire",
+                        detail=detail, where="%d mi %s, %s" % (_mi(it["km"]), it["dir"], it["name"]),
+                        when=("found " + ago(now - it["found"])) if it["found"] else "",
+                        do=", ".join(detail[1:]), source="NIFC", km=it["km"], rank=2.5,
+                        id=it["id"], item=it))
     for st in sorted(feeds.ROADS):
         for it in feeds.near((fc.get("roads_" + st) or {}).get("items") or [], lat, lon,
                              feeds.ROAD_SHOW_KM):
@@ -364,14 +459,70 @@ def build_reports(a, nearby, feed_cache, lat, lon, now=None):
                 when = fmt_age(now - float(it["reported"])) if it.get("reported") else ""
             except (TypeError, ValueError):
                 pass
-            out.append({"tier": "official", "kind": it["kind"], "sev": None, "cat": "road",
-                        "detail": it["detail"], "where": "%d mi %s" % (_mi(it["km"]), it["dir"]),
-                        "when": when, "source": it["source"], "km": it["km"], "rank": 2,
-                        "id": it["id"], "item": it})
-    out.sort(key=lambda r: (r["rank"], r["km"] if r["km"] is not None else 0,
-                            0 if r["tier"] == "official" else 1))
+            out.append(_row(kind=it["kind"], cat="road", detail=it["detail"],
+                            where="%d mi %s, %s" % (_mi(it["km"]), it["dir"],
+                                                    ", ".join(it["detail"][:1])),
+                            when=("reported %s ago" % when) if when and when != "just now" else when,
+                            do="find a detour" if it["kind"] == "ROAD CLOSED" else "expect delays",
+                            source=it["source"], km=it["km"], rank=2.5, id=it["id"], item=it))
+    quakes = (fc.get("quakes") or {}).get("items") or []
+    for it in feeds.near(quakes, lat, lon, feeds.QUAKE_LOCAL_KM):     # felt nearby
+        if it["time"] and now - it["time"] > 86400:
+            continue
+        out.append(_row(kind="EARTHQUAKE", cat="quake", where="M%.1f, %s" % (
+                            it["mag"], _where(it["km"], geo.bearing(lat, lon, it["lat"], it["lon"]))),
+                        when=ago(now - it["time"]) if it["time"] else "", source="USGS",
+                        km=it["km"], rank=3, id=it["id"], item=dict(it, text=it["place"])))
+    local_q = {r["id"] for r in out if r["cat"] == "quake"}
+    for it in quakes:                                                 # national
+        if it["id"] in local_q or (it["time"] and now - it["time"] > 86400):
+            continue
+        if not ((it["us"] and it["mag"] >= 5.5) or it["mag"] >= 7.0 or
+                it["alert"] in ("orange", "red")):
+            continue
+        out.append(_row(kind="EARTHQUAKE", cat="quake", where="M%.1f, %s" % (it["mag"], it["place"]),
+                        when=ago(now - it["time"]) if it["time"] else "",
+                        do="tsunami possible" if it["tsunami"] else "", source="USGS",
+                        scope=NATIONAL, sound=NATIONAL_SOUND, rank=11, id=it["id"],
+                        item=dict(it, text=it["place"])))
+    out += faa_rows((fc.get("faa") or {}).get("items") or [], ctx.get("airports") or [])
+    out.sort(key=lambda r: (r["rank"], r["km"] if r["km"] is not None else 0))
     return out
 
+
+def faa_rows(items, airports):
+    """Flights: one national row for ground stops at many airports, and a row for any
+    ground stop, delay program or closure at your airports."""
+    rows = []
+    stops = sorted({i["arpt"] for i in items if i["type"] == "stop"})
+    if len(stops) >= feeds.FAA_MANY:
+        mine = [a for a in airports if a in stops]
+        incl = mine or stops[:3]
+        rows.append(_row(kind="FLIGHTS", cat="faa", where="Ground stops at %d airports, incl. %s" % (
+                             len(stops), ", ".join(incl)),
+                         do="check your flight", source="FAA", scope=NATIONAL,
+                         sound=NATIONAL_SOUND, rank=10, id="faa-many-stops",
+                         item={"text": "Ground stops: " + ", ".join(stops)}))
+    words = {"stop": "Ground stop at %s", "delay program": "Ground delay program at %s",
+             "closed": "%s closed", "delay": "Delays at %s"}
+    summed = set(stops) if rows else set()        # already named in the line above
+    for i in items:
+        if i["arpt"] not in airports or (i["type"] == "stop" and i["arpt"] in summed):
+            continue
+        if i["type"] == "delay" and not re.search(r"(4[5-9]|[5-9]\d) min|hour", i["max"] + i["avg"],
+                                                  re.I):
+            continue                                # short delays: not worth a line
+        bits = [words[i["type"]] % i["arpt"]]
+        if i["avg"]:
+            bits.append("avg " + i["avg"])
+        if i["reason"]:
+            bits.append(i["reason"].split(":")[-1].strip().lower())
+        rows.append(_row(kind="FLIGHTS", cat="faa", where=", ".join(bits),
+                         when=("until " + i["until"]) if i["until"] else "",
+                         do="check your flight", source="FAA", scope=NATIONAL,
+                         sound=NATIONAL_SOUND, rank=10.5,
+                         id="faa-%s-%s" % (i["type"].replace(" ", "-"), i["arpt"]), item=i))
+    return rows
 
 
 def now_source(n, dot="·"):

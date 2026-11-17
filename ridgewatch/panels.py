@@ -395,7 +395,7 @@ class Panels(Cluster):
         boxes = [("DATA LINK", link[0], link[1], link[2], "label", "", self.last_online_text()),
                  ("GPS", gps[0], gps[1], gdetail or "", gspec2,
                   self.gps_port() if self.follow else "", hint)]
-        h1 = h // 2
+        h1 = (h + 1) // 2                         # DATA LINK gets the spare row (way back)
         for (title, word, spec, detail, dspec, right, more), (by, bh) in zip(
                 boxes, ((y, h1), (y + h1, h - h1))):
             self.box(by, x, bh, w, title, spec, right, "dim")
@@ -689,7 +689,8 @@ class Panels(Cluster):
             return ("For the last known position", "warn")
         return None
 
-    CAT_SPEC = {"road": "pick", "fire": "hot"}
+    CAT_SPEC = {"road": "pick", "fire": "hot", "lsr": "warn", "power": "warn", "ipaws": "err",
+                "quake": "value", "faa": "warn"}
 
     def report_spec(self, r):
         return sev_spec(r["sev"]) if r["sev"] else self.CAT_SPEC.get(r["cat"], "value")
@@ -969,24 +970,52 @@ class Panels(Cluster):
         """The alerts screen (a): official alerts over you in full, then every other
         report with what's known about it."""
         g = self.g
-        out = self.nws_text_lines(entry, width)
-        others = [r for r in self.reports if r["where"] != "here"]
-        if others:
+        others = [r for r in self.reports if not (r["cat"] == "nws" and r["where"] == "here")]
+        first = [r for r in others if r["cat"] != "nws" and r["rank"] < 1 and
+                 r.get("scope", "local") == "local"]          # emergencies from officials: on top
+        out = []
+        if first:
+            out += [("EMERGENCY ALERTS", "err"), ("", "value")]
+            out += self.report_text_lines(first, width)
+            out += [(g["h"] * width, "line"), ("", "value")]
+        out += self.nws_text_lines(entry, width)
+        local = [r for r in others if r.get("scope", "local") == "local" and r not in first]
+        national = [r for r in others if r.get("scope") == "national"]
+        for title, group in (("AROUND YOU", local), ("NATIONAL", national)):
+            if not group:
+                continue
             out += [("", "value"), (g["h"] * width, "line"), ("", "value")]
-            out.append(("AROUND YOU", "title"))
+            out.append((title, "title"))
             out.append(("", "value"))
-        for r in others:
+            out += self.report_text_lines(group, width)
+        return self.alert_text_tail(out, width)
+
+    def report_text_lines(self, rows, width):
+        g = self.g
+        out = []
+        for r in rows:
             spec = self.report_spec(r)
             mark = g["tri"] if r["tier"] == "official" else "●"
             out.append(("%s %s" % (mark, r["kind"]), spec))
-            rest = [x for x in r["detail"] + [r["where"], r["when"], r["source"]] if x]
+            rest = [x for x in [r["where"], r["when"], r["source"]] if x]
             for line in textwrap.wrap((" %s " % g["dot"]).join(rest), width - 2):
                 out.append(("  " + line, "value"))
+            if r.get("do"):
+                out.append(("  " + r["do"], spec))
             it = r["item"]
             extra = it.get("headline") or it.get("text") or ""
             for line in textwrap.wrap(extra, width - 2):
                 out.append(("  " + line, "label"))
+            for more in (it.get("description"), it.get("instruction")) if r["cat"] == "ipaws" else ():
+                if not more or more == extra:
+                    continue
+                for para in _paragraphs(more):
+                    for line in textwrap.wrap(para, width - 2):
+                        out.append(("  " + line, "value"))
             out.append(("", "value"))
+        return out
+
+    def alert_text_tail(self, out, width):
         if self.feed_problems():
             out.append(("couldn't check: " + "; ".join(self.feed_problems()), "dim"))
         vl = self.view_loc()

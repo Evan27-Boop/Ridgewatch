@@ -1,4 +1,4 @@
-# Ridgewatch 3.3.1
+# Ridgewatch 3.4.0
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.
@@ -37,17 +37,26 @@ show a dim dash and the reason.
 | GRID | map grid (MGRS / US National Grid), coordinates, accuracy | |
 | WAYPOINT | distance and direction to where the trip started; tap to point it at a saved place or the last spot with internet | |
 | ER | the nearest emergency room, straight-line | amber when over 30 miles away |
-| ALERTS | a master light (worst official warning, ALL CLEAR, or NOT UPDATING) and the list | the warning's own color |
+| ALERTS | a table: WHAT, WHERE, WHEN, DO. The worst local item is a colored bar on top (or ALL CLEAR, or why alerts aren't current), then the other local items, then NATIONAL | the worst item's color |
 | RADIO | scanner calls as text, once the radio helper exists; until then it says it isn't connected | |
 | WEATHER | conditions, high and low, rain outlook, daylight, in words; tap for the 24-hour temperature and rain graphs | amber title when the station is old and the forecast is standing in |
 | DATA LINK | ONLINE, LIMITED, STALE, OFFLINE; while offline, the way back to where the internet last answered | |
 | GPS | 3D FIX, 2D FIX, NO FIX, NO GPS, OFF | |
 
-Sounds: a double beep for a new official warning; one beep when DATA LINK or GPS
-changes. They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is
-installed), or the terminal bell if there's no audio player. At start-up Ridgewatch turns
-the system volume all the way up; set `"max_volume": false` in `config.json` to leave it
-alone.
+**Sounds.** A **beep** (high) is about where you are; a **buzz** (low) is about
+somewhere else or the machine. Twice means act on it.
+
+| Sound | Means |
+|---|---|
+| beep beep | a new warning or emergency over you or ahead |
+| beep | any other new local item: advisory, storm report, outage, fire, quake |
+| buzz | a new national item |
+| buzz buzz | DATA LINK or GPS changed, or outside power was lost |
+
+Each item sounds once; one that disappears for over an hour and comes back sounds again.
+They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is installed),
+or the terminal bell if there's no audio player. At start-up Ridgewatch turns the system
+volume all the way up; set `"max_volume": false` in `config.json` to leave it alone.
 
 On a machine with a battery, the top bar shows the level and whether it's charging:
 green when plugged in, amber on battery, red at 20% or less.
@@ -98,14 +107,26 @@ Ridgewatch looks there first. To use a different port, set `"gps_port"` in
 On WSL the GPS has to be passed through from Windows with `usbipd`; without it,
 pick a place with `l` and the GPS gauges show a dash.
 
-## Data sources
+## Data sources: the strict list
 
-| What | From | Needs |
-|---|---|---|
-| Warnings, forecast, conditions | National Weather Service (api.weather.gov) | nothing |
-| Wildfires | National Interagency Fire Center | nothing |
-| Road incidents | Georgia 511 and North Carolina DriveNC | a free developer key from each state, in `"keys_511": {"GA": "...", "NC": "..."}` |
-| Towns, counties, hospitals | bundled files, read once at startup | nothing; they work offline |
+Ridgewatch only ever asks the sources below (`ridgewatch/sources.py`); any other address
+is refused. A new source goes into `SPEC.md` first.
+
+| What | From | Shows when | Needs |
+|---|---|---|---|
+| Warnings, forecast, conditions | National Weather Service (api.weather.gov) | over you, or a severe warning nearby or ahead | nothing |
+| Storm reports: damage, flooding, tornadoes, large hail | NWS Local Storm Reports | within 25 mi, last 6 hours | nothing |
+| Evacuations, shelter orders, 911 outages | FEMA IPAWS public feed | your county or state; national alerts anywhere | nothing |
+| Power outages | Duke Energy's public outage layer | 250+ customers out within 15 mi | nothing |
+| Wildfires | National Interagency Fire Center | within 50 mi | nothing |
+| Earthquakes | USGS | 2.5+ within 100 mi; nationally 5.5+ in the US or 7.0+ anywhere | nothing |
+| Road incidents | Georgia 511 and North Carolina DriveNC | within 25 mi | a free developer key from each state, in `"keys_511": {"GA": "...", "NC": "..."}` |
+| Flights | FAA airport status | ground stops at 5+ airports, or trouble at your airports | nothing; `"airports"` in `config.json` (GSP, CLT, ATL by default) |
+| Towns, counties, hospitals | bundled files, read once at startup | | nothing; they work offline |
+
+Not covered by any database: crashes, police and fire activity in South Carolina (no
+public feed; the radio helper is the plan), and DHS terrorism bulletins (no
+machine-readable feed).
 
 ## Code map
 
@@ -122,7 +143,8 @@ ridgewatch/locate.py     the GPS reader (background thread, reconnects by itself
 ridgewatch/follow.py     when to refetch as you move
 ridgewatch/places.py     offline towns and ZIP codes
 ridgewatch/hospitals.py  offline emergency rooms
-ridgewatch/sound.py      beeps through the speakers
+ridgewatch/sources.py    the strict source list
+ridgewatch/sound.py      beeps and buzzes through the speakers
 ridgewatch/power.py      battery level
 ridgewatch/backlight.py  screen brightness
 ridgewatch/geo.py sun.py theme.py settings.py plain.py   small helpers

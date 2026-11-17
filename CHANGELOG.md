@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.4.0 (2026-11-17): strict alert sources
+
+- **A strict source list** (`sources.py`, and a table in SPEC.md). Every request goes
+  through one check; any address not on the list is refused.
+- **New local sources:** NWS Local Storm Reports (damage, flooding, tornadoes, large
+  hail within 25 mi), FEMA's public IPAWS feed (evacuations, shelter orders, 911 outages
+  for your county or state), Duke Energy outages (250+ customers within 15 mi), and
+  USGS earthquakes within 100 mi.
+- **National:** FAA ground stops (5+ airports, or any trouble at GSP, CLT, ATL) and
+  significant earthquakes, under a NATIONAL divider in the ALERTS tile.
+- **ALERTS is a table:** WHAT, WHERE, WHEN, DO. The worst local item is a colored bar
+  on top; each row says what to do in a few words. Tap for the full list, with
+  emergencies from officials first.
+- **Four standard sounds:** beep beep (warning), beep (new local item), buzz (new
+  national item), buzz buzz (DATA LINK, GPS or power). Each item sounds once; a
+  source's first load after start-up is quiet.
+- More room for ALERTS on the Surface: tighter gauges, HERE, WAYPOINT and bottom row.
+
 ## 3.3.1 (2026-11-17)
 
 - **A new warning is one double beep** (beep, short pause, beep) played as a single

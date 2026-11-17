@@ -106,11 +106,13 @@ class Cluster(object):
     def cluster_plan(h):
         """Row heights for the bands, top to bottom, for `h` rows of screen."""
         drows = 6 if h >= 38 else 4
-        ah = 8 if h >= 43 else 7 if h >= 39 else 6
-        gh = drows + 5
-        mid = 5 if h >= 40 else 4                 # WAYPOINT and ER need two lines
-        wh = h - gh - 5 - mid - ah
-        return {"drows": drows, "gauges": gh, "here": 5, "mid": mid, "alerts": ah, "bottom": wh}
+        gh = drows + (5 if h >= 42 else 4)        # tight: no blank row under the digits
+        here = mid = 5 if h >= 40 else 4          # HERE, WAYPOINT and ER need two lines
+        ah = 12 if h >= 43 else 11                # the alerts table
+        wh = h - gh - here - mid - ah
+        if wh < 8:                                # DATA LINK and GPS need 4 rows each
+            ah, wh = ah - (8 - wh), 8
+        return {"drows": drows, "gauges": gh, "here": here, "mid": mid, "alerts": ah, "bottom": wh}
 
     def draw_cluster(self, y, x, h, w, entry):
         p = self.cluster_plan(h)
@@ -169,7 +171,7 @@ class Cluster(object):
         if room >= 10:
             for i, parts in enumerate(side[: drows]):
                 self.runs(y + 1 + i, sx, parts, room)
-        ly = y + drows + 2
+        ly = y + drows + (2 if h >= drows + 5 else 1)
         if ly < y + h - 1:
             self.runs(ly, ix, line1, iw)
         if ly + 1 < y + h - 1:
@@ -343,7 +345,7 @@ class Cluster(object):
         else:
             line2 = [("GPS fix lost. Showing the last known position.", "warn")]
         self.runs(y + 2, x + 2, line2, iw)
-        if self.follow and self.entered and time.time() - self.entered[1] < 600:
+        if self.follow and self.entered and time.time() - self.entered[1] < 600 and h >= 5:
             self.put(y + 3, x + 2, ("entered %s %s" % (self.entered[0],
                                                        views.ago(time.time() - self.entered[1])))[:iw],
                      "hot")
@@ -367,7 +369,12 @@ class Cluster(object):
             text = "Last known position"
         else:
             text = "Picked location"
-        self.put(y + 3, x + 2, text[:iw], "label")
+        if h >= 5:
+            self.put(y + 3, x + 2, text[:iw], "label")
+        else:                                       # short tile: after the coordinates
+            coords = "%.4f, %.4f" % (vl["lat"], vl["lon"])
+            if len(coords) + 3 + len(text) <= iw:
+                self.put(y + 2, x + 2 + len(coords), " %s %s" % (self.g["dot"], text), "label")
 
     def tile_waypoint(self, y, x, h, w):
         """Distance and direction to the chosen waypoint (tap to choose another)."""
@@ -476,50 +483,108 @@ class Cluster(object):
             text = lines[i] if 0 <= i < len(lines) else ""
             self.put(y + r, x, text[: w].center(w), spec, curses.A_REVERSE | curses.A_BOLD)
 
+    def alert_columns(self, w):
+        """Column x offsets (from the tile's left edge) and widths: WHAT, WHERE, WHEN, DO."""
+        iw = w - 4
+        cw = [max(18, int(iw * 0.19)), max(26, int(iw * 0.31)), max(14, int(iw * 0.16))]
+        cw.append(iw - sum(cw) - 3 - 6)               # DO, leaving room for the source
+        xs = [2]
+        for c in cw[:-1]:
+            xs.append(xs[-1] + c + 1)
+        return xs, cw
+
+    def alert_cells(self, r):
+        """[(text, spec)] for the four columns of one row."""
+        spec = self.report_spec(r)
+        do_spec = spec if r.get("do", "").isupper() or r["rank"] < 1 else \
+            ("label" if r["cat"] in ("fire",) else spec)
+        return [(r["kind"], spec), (r["where"], "value"), (r["when"], "label"),
+                (r.get("do") or "", do_spec)]
+
+    def draw_cells(self, y, x, w, cells, source, bar_spec=None):
+        xs, cw = self.alert_columns(w)
+        extra = curses.A_REVERSE | curses.A_BOLD if bar_spec else 0
+        if bar_spec:
+            self.put(y, x + 1, " " * (w - 2), bar_spec, curses.A_REVERSE)
+        for (text, spec), cx, width in zip(cells, xs, cw):
+            if len(text) > width:
+                text = text[: max(1, width - 1)] + self.g["ell"]
+            self.put(y, x + cx, text, bar_spec or spec, extra if bar_spec else
+                     (curses.A_BOLD if spec not in ("value", "label", "dim") else 0))
+        if source:
+            self.put(y, x + w - 2 - len(source), source, bar_spec or "dim", extra)
+
     def cluster_alerts(self, y, x, h, w, entry):
+        """The alerts table: WHAT, WHERE, WHEN, DO. The worst local item is a colored
+        bar on top (or ALL CLEAR, or why alerts aren't current); then the other local
+        items; then NATIONAL under a divider."""
         a = views.view_alerts(entry)
-        reports = self.reports
-        off = sum(1 for r in reports if r["tier"] == "official")
-        rep_n = len(reports) - off
-        bits = (["%d official" % off] if off else []) + (["%d reported" % rep_n] if rep_n else [])
-        right = (" %s " % self.g["dot"]).join(bits) or ("none" if a["known"] else None)
-        first = next((r for r in reports if r["sev"]), None)
-        rspec = self.report_spec(first) if first else ("label" if bits else "dim")
-        if a["known"] and not a["trusted"]:
-            right, rspec = "Out of date", "warn"
+        local = [r for r in self.reports if r.get("scope", "local") == "local"]
+        nat = [r for r in self.reports if r.get("scope") == "national"]
+        right = "%d local %s %d national" % (len(local), self.g["dot"], len(nat))
         flash_on = self.alarm_on() and int(time.time() * 2) % 2 == 0
         from .panels import sev_spec
+        top = local[0] if local else None
         border = sev_spec(self.alarm_items[0]["severity"]) if flash_on else \
-            "warn" if a["known"] and not a["trusted"] else "alerts"
-        self.box(y, x, h, w, "ALERTS", border, right, rspec)
+            "warn" if a["known"] and not a["trusted"] else \
+            self.report_spec(top) if top and top["rank"] < 1 else "alerts"
+        self.box(y, x, h, w, "ALERTS", border, right, border if border != "alerts" else "label")
         if flash_on and w > 12:
             self.put(y, x + 2, " ALERTS ", border, curses.A_REVERSE)
-        ih = h - 2
-        bw = 30 if w >= 130 else 24
-        word, spec, l1, l2 = self.alert_badge(a)
-        brows = 3 if ih >= 5 else 1
-        self.big_badge(y + 1, x + 2, bw, brows, word, spec)
-        if ih > brows:
-            self.put(y + 1 + brows, x + 2, l1[:bw], "value")
-        if ih > brows + 1:
-            self.put(y + 2 + brows, x + 2, l2[:bw], "label")
-        lx = x + 2 + bw + 3
-        lw = x + w - 2 - lx
-        list_h = ih
+        ih, iy = h - 2, y + 1
+        xs, cw = self.alert_columns(w)
+        for name, cx in zip(("WHAT", "WHERE", "WHEN", "DO"), xs):
+            self.put(iy, x + cx, name, "dim", curses.A_BOLD)
         note = self.alert_note()
-        if note and list_h >= 2:
-            self.put(y + ih, lx, note[0][:lw], note[1])
-            list_h -= 1
-        rows = self.alert_rows(a, list_h, status=False)
-        if not rows and a["known"]:
-            rows = [([("Nothing active nearby", "label")], "")]
-        for i, (parts, source) in enumerate(rows[:list_h]):
-            used = sum(len(p[0]) for p in parts)
-            if source and used + len(source) + 2 <= lw:
-                self.put(y + 1 + i, lx + lw - len(source), source, "dim")
-                self.runs(y + 1 + i, lx, parts, lw - len(source) - 2)
-            else:
-                self.runs(y + 1 + i, lx, parts, lw)
+        if note:
+            self.put(iy, x + w - 2 - len(note[0]), note[0], note[1])
+        row = iy + 1
+        # the top bar: what's wrong with the alerts, the worst local item, or all clear
+        word, spec, l1, l2 = self.alert_badge(a)
+        rest = local
+        if not a["known"] or not a["trusted"]:
+            cells = [(word, spec), (l1, spec), (l2, spec), ("", spec)]
+            self.draw_cells(row, x, w, cells, "", bar_spec=spec)
+        elif top:
+            bar = sev_spec(top["sev"]) if top["sev"] else self.report_spec(top)
+            self.draw_cells(row, x, w, self.alert_cells(top), top["source"],
+                            bar_spec=bar if (not self.alarm_on() or flash_on or True) else None)
+            rest = local[1:]
+        else:
+            self.draw_cells(row, x, w, [("ALL CLEAR", "ok"), ("Nothing active nearby", "ok"),
+                                        (l1.replace("Checked", "checked"), "ok"), ("", "ok")],
+                            "", bar_spec="ok")
+        row += 1
+        n_nat = min(len(nat), 2 if ih >= 8 else 1) if nat else 0
+        local_rows = (iy + ih) - row - (n_nat + 1 if n_nat else 0)
+        shown = rest[:local_rows]
+        if len(rest) > local_rows and local_rows >= 1:
+            shown = rest[: local_rows - 1]
+        for r in shown:
+            self.draw_cells(row, x, w, self.alert_cells(r), r["source"])
+            row += 1
+        hidden = len(rest) - len(shown)
+        if hidden > 0 and local_rows >= 1:
+            self.put(row, x + 2, "+%d more local %s tap to see all" % (hidden, self.g["dot"]), "label")
+            row += 1
+        if n_nat:
+            row = (iy + ih) - n_nat - 1
+            self.put(row, x + 2, "NATIONAL ", "dim", curses.A_BOLD)
+            self.put(row, x + 11, self.g["h"] * (w - 13), "line")
+            more = len(nat) - n_nat
+            if more > 0:
+                txt = " +%d more " % more
+                self.put(row, x + w - 3 - len(txt), txt, "label")
+            for i, r in enumerate(nat[:n_nat]):
+                spec = self.report_spec(r)
+                span = (" %s " % self.g["dot"]).join(t for t in (r["where"], r["when"], r.get("do"))
+                                                     if t)
+                width = w - 4 - cw[0] - 1 - len(r["source"]) - 2
+                if len(span) > width:
+                    span = span[: max(1, width - 1)] + self.g["ell"]
+                self.put(row + 1 + i, x + xs[0], r["kind"][: cw[0]], spec, curses.A_BOLD)
+                self.put(row + 1 + i, x + xs[1], span, "value")
+                self.put(row + 1 + i, x + w - 2 - len(r["source"]), r["source"], "dim")
 
 
 COMPASS8 = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]

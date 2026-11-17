@@ -105,7 +105,10 @@ class UI(Panels):
         self.poweroff_cmd = POWEROFF_CMD
         self.speaker = sound.Speaker(store.home, self._bell,
                                      max_volume=store.config.get("max_volume", True))
-        self.alert_beeps = []                   # times to play the double beep (new warnings)
+        self.alert_beeps = []                   # times to play the warning (beep beep)
+        self.cues = []                          # (time, "local" or "national") for new rows
+        self.sound_ready = set()                # sources whose first load has been seen
+        self.loaded = set()                     # sources that answered this session
         self.backlight = backlight.Backlight() if store.config.get("brightness") else None
         self._moving_at = 0
         self.last_key = time.time()
@@ -385,22 +388,83 @@ class UI(Panels):
             self.dirty = True
         self.nearby_items = items
         reports = views.build_reports(views.view_alerts(entry, now), items,
-                                      self.store.cache["feeds"], vl["lat"], vl["lon"], now)
+                                      self.store.cache["feeds"], vl["lat"], vl["lon"], now,
+                                      self.alert_context(entry))
         if [(r["id"], r["where"], r["when"]) for r in reports] != \
                 [(r["id"], r["where"], r["when"]) for r in self.reports]:
             self.dirty = True
         self.reports = reports
+        self.sound_new_rows(reports, now)
         close = [i for i in items if i["ahead"] and i["km"] <= 24]
         fresh = views.new_urgent(self.ahead_memory, close)
         if fresh:
             self.raise_alarm(fresh, "AHEAD")
 
+    def alert_context(self, entry):
+        """What the alert sources need to know about where you are: your county's SAME
+        code, your state (and nearby states) as FIPS codes, your airports."""
+        zone = (entry.get("points") or {}).get("county_zone") or ""
+        st = zone[:2] if geo.same_code(zone) else ""
+        return {"same": geo.same_code(zone), "statefips": geo.STATE_FIPS.get(st, ""),
+                "airports": self.store.config.get("airports") or []}
+
+    CAT_SOURCE = {"nws": "nws", "lsr": "lsr", "ipaws": "ipaws", "power": "outages",
+                  "fire": "fires", "road": "roads", "quake": "quakes", "faa": "faa"}
+
+    def sound_new_rows(self, reports, now):
+        """One sound per kind for rows not seen before (see SPEC Sounds). A source's
+        first load after start-up is quiet, so a restart doesn't replay everything.
+        Warnings from NWS already sound through the alarm."""
+        seen = self.store.cache.setdefault("seen_rows", {})
+        loaded = {cat for cat, src in self.CAT_SOURCE.items()
+                  if any(n == src or n.startswith(src + "_") for n in self.loaded)}
+        quiet = {r["cat"] for r in reports} - (loaded & self.sound_ready)
+        # new: never seen, or gone for over an hour and back (a new episode)
+        fresh = [r for r in reports if r["id"] and (r["id"] not in seen or
+                                                    now - seen[r["id"]] > 3600)]
+        for r in reports:
+            if r["id"]:
+                seen[r["id"]] = now
+        for k in [k for k, t in seen.items() if now - t > 3 * 86400]:
+            del seen[k]
+        self.sound_ready |= loaded
+        fresh = [r for r in fresh if r["cat"] not in quiet]
+        urgent = [r for r in fresh if r["sound"] == views.WARNING_SOUND and r["cat"] != "nws"]
+        if urgent:
+            r = urgent[0]
+            self.raise_alarm([{"event": r["kind"].title(), "severity": r["sev"] or "Severe",
+                               "km": 0.0, "id": r["id"]}], "NEW")
+        kinds = {r["sound"] for r in fresh if r["sound"] != views.WARNING_SOUND}
+        for kind in (views.LOCAL_SOUND, views.NATIONAL_SOUND):
+            if kind in kinds:
+                self.cues.append((now + (0.8 if self.cues else 0), kind))
+
     def feeds_tick(self, now):
-        """Ask for wildfires and state 511 roads when they're due."""
+        """Ask each source on the list for its news when it's due."""
         vl = self.view_loc()
         c = self.store.config
         fc = self.store.cache["feeds"]
         jobs = []
+        if vl:
+            entry = self.store.entry(vl)
+            office = (entry.get("points") or {}).get("office")
+            if office:
+                jobs.append(("lsr", ("lsr", office, (fc.get("lsr") or {}).get("products") or {}),
+                             feeds.LSR_EVERY, False))
+            fips = {geo.STATE_FIPS[s] for s in self.nearby_states() if s in geo.STATE_FIPS}
+            ctx = self.alert_context(entry)
+            if ctx["statefips"]:
+                fips.add(ctx["statefips"])
+            if fips:
+                jobs.append(("ipaws", ("ipaws", sorted(fips),
+                                       (fc.get("ipaws") or {}).get("alerts") or {}),
+                             feeds.IPAWS_EVERY, False))
+            at = (fc.get("outages") or {}).get("at")
+            moved = at and geo.km_between(at[0], at[1], vl["lat"], vl["lon"]) > 8
+            jobs.append(("outages", ("outages", round(vl["lat"], 3), round(vl["lon"], 3)),
+                         feeds.OUTAGE_EVERY, moved))
+        jobs.append(("quakes", ("quakes",), feeds.QUAKE_EVERY, False))
+        jobs.append(("faa", ("faa",), feeds.FAA_EVERY, False))
         if vl and c.get("wildfires"):
             at = (fc.get("fires") or {}).get("at")
             moved = at and geo.km_between(at[0], at[1], vl["lat"], vl["lon"]) > feeds.FIRE_MOVE_KM
@@ -421,7 +485,9 @@ class UI(Panels):
 
     def feed_problems(self):
         """['wildfires: no connection', ...] for sources whose last try failed."""
-        names = {"fires": "wildfires", "roads_GA": "511GA", "roads_NC": "NCDOT"}
+        names = {"fires": "wildfires", "roads_GA": "511GA", "roads_NC": "NCDOT",
+                 "lsr": "storm reports", "ipaws": "FEMA alerts", "outages": "power outages",
+                 "quakes": "earthquakes", "faa": "flights"}
         return ["%s: %s" % (names.get(k, k), v["err"]) for k, v in
                 sorted(self.store.cache["feeds"].items()) if v.get("err")]
 
@@ -444,11 +510,15 @@ class UI(Panels):
     def ring(self, now):
         while self.alert_beeps and self.alert_beeps[0] <= now:
             self.alert_beeps.pop(0)
-            if not self.speaker.beep("alert"):
+            if not self.speaker.beep("warning"):
                 self.beeps = sorted(self.beeps + [now + 0.5])   # no speaker: two terminal bells
         while self.beeps and self.beeps[0] <= now:
             self.beeps.pop(0)
-            self.speaker.beep()
+            self.speaker.beep("system")
+        due = [c for c in self.cues if c[0] <= now]
+        self.cues = [c for c in self.cues if c[0] > now]
+        for _, kind in due:
+            self.speaker.beep(kind)
 
     @staticmethod
     def _bell():
@@ -657,6 +727,8 @@ class UI(Panels):
                 break
             e = self.store.cache["feeds"].setdefault(name, {})
             self.link_note(error)
+            if not error:
+                self.loaded.add(name)
             if error:
                 e["err"] = error                      # keep what we had; retry 2, 4... min
                 e["retry"] = min(2 * (e.get("retry") or 60), 30 * 60)
@@ -677,6 +749,8 @@ class UI(Panels):
                 self.link_note(error, nws_side=True)
             vl = self.view_loc()
             current = vl is not None and key == settings.loc_key(vl)
+            if section == "alerts" and current and not error:
+                self.loaded.add("nws")
             if section == "alerts" and data and current:
                 fresh = views.new_urgent(entry, data.get("items", []))
                 if fresh:

@@ -56,8 +56,10 @@ way up when it starts. Check the speakers work:
 
 ```
 aplay -l                                    # should list the internal sound card
-aplay ~/.config/ridgewatch/alert.wav        # the warning double beep (made on first run)
-aplay ~/.config/ridgewatch/beep.wav         # the status beep
+aplay ~/.config/ridgewatch/sound-warning.wav    # beep beep: a warning (made on first run)
+aplay ~/.config/ridgewatch/sound-local.wav      # beep: a new local item
+aplay ~/.config/ridgewatch/sound-national.wav   # buzz: a new national item
+aplay ~/.config/ridgewatch/sound-system.wav     # buzz buzz: DATA LINK, GPS or power
 ```
 
 If `aplay -l` lists no cards, install `sof-firmware` and reboot. alsa-utils saves the

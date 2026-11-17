@@ -17,10 +17,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-from tests.fake_nws import (FakeNWS, alert, alerts, fires, grid, hourly, obs,  # noqa: E402
-                            points, road_events, stations)
+from tests.fake_nws import (FakeNWS, alert, alerts, duke, faa_xml, fires, grid,  # noqa: E402
+                            hourly, ipaws_cap, ipaws_feed, lsr_text, obs, points, road_events,
+                            stations, usgs)
 from ridgewatch import (backlight, feeds, follow, geo, hospitals, locate, nws,  # noqa: E402
-                        panels, places, plain, power, settings, sound, sun, theme, ui, views)
+                        panels, places, plain, power, settings, sound, sources, sun, theme, ui,
+                        views)
 from ridgewatch.panels import UNI  # noqa: E402
 
 
@@ -585,9 +587,11 @@ class Reports(unittest.TestCase):
             [34.86, -82.75, "Table Rock", 850, 40], [36.5, -80.0, "Far Away", 10, 0]]}))}}
         rs = views.build_reports(a, near, cache, 34.68, -82.84, now)
         self.assertEqual([(r["tier"], r["kind"]) for r in rs],
-                         [("official", "WIND ADVISORY"), ("official", "TORNADO WARNING"),
-                          ("official", "WILDFIRE")])            # here, ahead, then closest
-        self.assertEqual(rs[1]["where"], "4 mi ahead")
+                         [("official", "TORNADO WARNING"), ("official", "WIND ADVISORY"),
+                          ("official", "WILDFIRE")])     # a warning ahead outranks an advisory here
+        self.assertEqual((rs[0]["where"], rs[0]["do"], rs[0]["sound"]),
+                         ("4 mi ahead", "TAKE SHELTER NOW", "warning"))
+        self.assertEqual((rs[1]["do"], rs[1]["sound"]), ("watch for debris", "local"))
 
 
 class Surface(unittest.TestCase):
@@ -634,7 +638,7 @@ class Surface(unittest.TestCase):
         sp = sound.Speaker(home, lambda: rang.append(2),
                            which=lambda p: true if p == "aplay" else None)
         self.assertEqual(sp.player, "aplay")
-        w = wave.open(os.path.join(home, "beep.wav"))
+        w = wave.open(os.path.join(home, "sound-local.wav"))
         self.assertEqual((w.getnchannels(), w.getsampwidth()), (1, 2))
         single = w.getnframes()
         frames = w.readframes(single)
@@ -642,10 +646,12 @@ class Surface(unittest.TestCase):
         loudest = max(abs(int.from_bytes(frames[i:i + 2], "little", signed=True))
                       for i in range(0, len(frames), 2))
         self.assertGreater(loudest, 30000)                   # near full scale
-        w = wave.open(os.path.join(home, "alert.wav"))
-        self.assertGreater(w.getnframes(), 2 * single)       # two beeps and a gap
+        w = wave.open(os.path.join(home, "sound-warning.wav"))
+        self.assertGreater(w.getnframes(), 2 * single)       # beep beep: two beeps and a gap
         w.close()
-        self.assertTrue(sp.beep("alert"))
+        for kind in ("warning", "local", "national", "system"):
+            self.assertTrue(os.path.exists(os.path.join(home, "sound-%s.wav" % kind)))
+            self.assertTrue(sp.beep(kind))
         sp.beep()
         for p in sp.procs:
             p.wait()
@@ -770,6 +776,117 @@ class Surface(unittest.TestCase):
         self.assertEqual(store.config["shutdown_after_min"], 10)
 
 
+class AlertSources(unittest.TestCase):
+    """The strict source list: each new feed parsed, filtered and turned into rows."""
+    LAT, LON = 34.70, -82.80
+    CTX = {"same": "045077", "statefips": "45", "airports": ["GSP", "CLT", "ATL"]}
+
+    def rows(self, cache, now=None):
+        a = {"known": True, "trusted": True, "items": []}
+        return views.build_reports(a, [], cache, self.LAT, self.LON, now or time.time(), self.CTX)
+
+    def test_storm_reports(self):
+        now = time.time()
+        text = lsr_text([[34.75, -82.80, "TSTM WND DMG", "TREES DOWN ON SC-183", 30],
+                         [34.70, -82.82, "HAIL", "SMALL HAIL", 20],
+                         [35.90, -82.80, "FLASH FLOOD", "FAR AWAY", 20],
+                         [34.71, -82.81, "FLASH FLOOD", "OLD REPORT", 8 * 60]], now)
+        reps = feeds.parse_lsr(text)
+        self.assertEqual([r["kind"] for r in reps], ["TREES DOWN", "FLOODING", "FLOODING"])  # no small hail
+        rows = self.rows({"lsr": {"products": {"p": {"t": now, "reports": reps}}}}, now)
+        self.assertEqual([r["kind"] for r in rows], ["TREES DOWN"])   # far and 8-hour-old reports left out
+        r = rows[0]
+        self.assertTrue(r["where"].startswith("3 mi N, near Pickens"))
+        self.assertTrue(r["when"].startswith("reported "))
+        self.assertEqual((r["do"], r["source"], r["sound"]), ("watch for debris", "NWS", "local"))
+
+    def test_fema_alerts(self):
+        import xml.etree.ElementTree as ET
+        mode = {"ipaws": [["EVI", "045077", "Evacuation order for Six Mile"],
+                          ["CAE", "045045", "Amber alert in Greenville County"],
+                          ["RWT", "045077", "Required weekly test"]]}
+        entries = feeds.parse_ipaws_feed(ET.fromstring(ipaws_feed("http://x", mode)))
+        self.assertEqual([(e["event"], e["statefips"]) for e in entries],
+                         [("EVI", "45"), ("CAE", "45"), ("RWT", "45")])
+        cap = feeds.parse_cap(ET.fromstring(ipaws_cap(mode, 0)))
+        self.assertEqual((cap["code"], cap["same"], cap["nws"]), ("EVI", ["045077"], False))
+        other = feeds.parse_cap(ET.fromstring(ipaws_cap(mode, 1)))
+        statewide = dict(other, same=["045000"], code="CEM")
+        from_nws = dict(cap, nws=True)
+        rows = self.rows({"ipaws": {"alerts": {"0": cap, "1": other, "2": statewide, "3": from_nws}}})
+        self.assertEqual([(r["kind"], r["where"], r["do"], r["sound"]) for r in rows],
+                         [("EVACUATION ORDER", "here", "EVACUATE NOW", "warning"),
+                          ("CIVIL EMERGENCY", "here", "follow official orders", "warning")])
+        ean = dict(other, same=["006037"], code="EAN")                     # national, anywhere
+        rows = self.rows({"ipaws": {"alerts": {"9": ean}}})
+        self.assertEqual((rows[0]["kind"], rows[0]["scope"]), ("NATIONAL EMERGENCY", "national"))
+
+    def test_power_outages(self):
+        few = feeds.parse_outages(duke({"outages": [[34.71, -82.80, 120], [34.80, -82.75, 80]]}))
+        self.assertEqual(self.rows({"outages": {"items": few}}), [])        # under 250: quiet
+        many = feeds.parse_outages(duke({"outages": [[34.71, -82.80, 900], [34.80, -82.75, 400]]}))
+        r = self.rows({"outages": {"items": many}})[0]
+        self.assertEqual((r["kind"], r["source"], r["do"]), ("POWER OUT", "DUKE", "signals may be out"))
+        self.assertIn("1,300 customers within 15 mi, nearest 1 mi N", r["where"])
+
+    def test_earthquakes(self):
+        q = feeds.parse_quakes(usgs({"quakes": [
+            [34.90, -82.60, 2.9, "5 km S of Liberty, South Carolina", 60],
+            [35.70, -117.50, 6.1, "15 km NE of Ridgecrest, CA", 30],
+            [38.30, 142.30, 5.9, "80 km E of Ishinomaki, Japan", 30],
+            [38.30, 142.40, 7.2, "90 km E of Ishinomaki, Japan", 10]]}))
+        rows = self.rows({"quakes": {"items": q}})
+        got = [(r["scope"], r["where"].split(",")[0]) for r in rows]
+        self.assertEqual(got, [("local", "M2.9"), ("national", "M6.1"), ("national", "M7.2")])
+        self.assertEqual(rows[1]["sound"], "national")
+
+    def test_flights(self):
+        import xml.etree.ElementTree as ET
+        many = feeds.parse_faa(ET.fromstring(faa_xml({"faa_stops": ["ATL", "BOS", "CLT", "DEN",
+                                                                    "JFK", "ORD"]})))
+        self.assertNotIn("LAS", [i["arpt"] for i in many])              # private-aircraft closure
+        rows = self.rows({"faa": {"items": many}})
+        self.assertEqual(rows[0]["where"], "Ground stops at 6 airports, incl. CLT, ATL")
+        self.assertEqual((rows[0]["scope"], rows[0]["sound"]), ("national", "national"))
+        self.assertEqual(len(rows), 1)                     # ATL and CLT are named in that line
+        few = feeds.parse_faa(ET.fromstring(faa_xml({"faa_stops": ["BOS", "CLT"]})))
+        rows = self.rows({"faa": {"items": few}})
+        self.assertEqual([r["where"].split(",")[0] for r in rows], ["Ground stop at CLT"])
+
+    def test_only_listed_sources_are_asked(self):
+        for url in (feeds.DUKE, feeds.IPAWS, feeds.USGS, feeds.FAA, feeds.WFIGS,
+                    feeds.ROADS["GA"][1], feeds.ROADS["NC"][1], "https://api.weather.gov/x"):
+            self.assertTrue(sources.allowed(url), url)
+        with self.assertRaises(nws.FetchError) as e:
+            nws.fetch_url("https://news.example.com/top", "ua", lambda b: b, tries=1)
+        self.assertIn("not on the source list", str(e.exception))
+
+    def test_new_rows_sound_once(self):
+        alarms = []
+        st = types.SimpleNamespace(store=types.SimpleNamespace(cache={}), loaded=set(),
+                                   sound_ready=set(), cues=[], CAT_SOURCE=ui.UI.CAT_SOURCE,
+                                   raise_alarm=lambda items, label: alarms.append(items))
+
+        def row(id_, cat, sound, kind="X"):
+            return {"id": id_, "cat": cat, "sound": sound, "kind": kind, "sev": "Extreme"}
+        t = 1000.0
+        ui.UI.sound_new_rows(st, [row("q1", "quake", "national")], t)      # cached, not loaded
+        st.loaded = {"quakes", "outages", "ipaws"}
+        ui.UI.sound_new_rows(st, [row("q1", "quake", "national")], t + 1)  # first load: quiet
+        self.assertEqual(st.cues, [])
+        ui.UI.sound_new_rows(st, [row("q1", "quake", "national"), row("q2", "quake", "national"),
+                                  row("d", "power", "local")], t + 2)
+        self.assertEqual(sorted(k for _, k in st.cues), ["local", "national"])   # one of each
+        st.cues = []
+        ui.UI.sound_new_rows(st, [row("q2", "quake", "national")], t + 3)
+        self.assertEqual(st.cues, [])                                       # seen: no repeat
+        ui.UI.sound_new_rows(st, [row("q2", "quake", "national")], t + 3 + 4000)
+        self.assertEqual([k for _, k in st.cues], ["national"])  # gone over an hour, back: again
+        st.cues = []
+        ui.UI.sound_new_rows(st, [row("e", "ipaws", "warning", "EVACUATION ORDER")], t + 5000)
+        self.assertEqual(alarms[0][0]["event"], "Evacuation Order")         # warnings: the alarm
+
+
 class EndToEnd(unittest.TestCase):
     """The text report against the fake NWS: fetch, parse, save, show."""
 
@@ -888,6 +1005,16 @@ class Dashboard(unittest.TestCase):
                      "RADIO", "WEATHER", "DATA LINK", "GPS", "RIDGEWATCH"):
             self.assertIn(" %s " % tile, out, tile)
         self.assertIn("Oconee Memorial", out)
+
+    def test_alerts_table(self):
+        mode = {"alerts": "none", "lsr": [[34.75, -82.84, "TSTM WND DMG", "TREES DOWN ON SC-133", 20]],
+                "outages": [[34.70, -82.83, 1200]], "faa_stops": ["ATL", "BOS", "DEN", "JFK", "ORD"],
+                "quakes": [[35.70, -117.50, 6.1, "15 km NE of Ridgecrest, CA", 30]]}
+        code, out, crashed = self.run_app(["--place", "clemson sc"], seconds=8, mode=mode)
+        self.assertEqual((code, crashed), (0, False))
+        for text in ("WHAT", "WHERE", "WHEN", "TREES DOWN", "POWER OUT", "NATIONAL",
+                     "Ground stops at 5 airports, incl. ATL", "M6.1, 15 km NE of Ridgecrest, CA"):
+            self.assertIn(text, out, text)
 
     def test_alert_details_screen(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"], keys=b"a")

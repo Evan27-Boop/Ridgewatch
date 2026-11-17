@@ -23,16 +23,19 @@ will also show police and fire radio calls as text.
 
 ## What it must do
 
-1. **Official weather warnings.** NWS alerts over you and on the road ahead, with a
-   master warning light and a beep for new warnings.
+1. **Official alerts, from a strict source list.** Warnings over you and on the road
+   ahead, nearby hazards, and a short list of national events. Only the sources in the
+   table below are ever asked; a new source goes into this spec first. The ALERTS tile
+   is a table (WHAT, WHERE, WHEN, DO) with the worst local item as a colored bar on top,
+   local items first and NATIONAL under a divider.
 2. **Where am I.** A position you can read to a 911 dispatcher: nearest town, county,
    map grid, nearest emergency room. A waypoint: distance and direction back to where
    the trip started, a saved place, or where the internet last worked.
 3. **Gauges.** Speed (with trip totals), elevation (with the grade and a long-descent
    warning) and compass heading in big type. Fixed spots, and a border color that acts
    as the warning light.
-4. **Hazards nearby.** Wildfires (NIFC) and road incidents (state 511 feeds, with your
-   own key).
+4. **Hazards nearby.** Storm damage and flooding reports, power outages, wildfires,
+   earthquakes and road incidents, each only within a set distance (see the table).
 5. **Weather.** A short text tile: conditions now, high and low, when rain starts,
    daylight left. The 24-hour graphs are one tap away.
 6. **Honesty about staleness.** Every reading shows its age. Old data is labeled, never
@@ -40,13 +43,44 @@ will also show police and fire radio calls as text.
 7. **Touch first.** Tap a tile to open its details, and a bar of large buttons along
    the bottom for the everyday controls. The keyboard still works as a backup.
 8. **Power, sound and brightness.** Shows the battery level and whether it is charging.
-   Beeps play through the speakers at full volume, not only the terminal bell: a
-   double beep for a new warning, a single beep for a status change. Screen brightness follows
-   the day and night looks. When outside power is lost (ignition off), it shuts down
+   Sounds play through the speakers at full volume (see Sounds). Screen brightness
+   follows the day and night looks. When outside power is lost (ignition off), it shuts down
    cleanly after 10 minutes unless power comes back or you tap KEEP RUNNING.
 9. **Radio (planned, not built).** A separate helper program turns scanner calls into
    text and hands them to the RADIO tile, which holds its place on screen until then.
    Built only after the core is field-tested.
+
+## Sources (the strict list)
+
+| Source | Scope | Shows when |
+|---|---|---|
+| NWS alerts (api.weather.gov) | local | over you, or a severe warning nearby or ahead |
+| NWS Local Storm Reports (api.weather.gov) | local | damage, flooding, tornado, large hail within 25 mi, last 6 h |
+| FEMA IPAWS public feed (apps.fema.gov) | local | evacuations, shelter orders, 911 outages and other public-safety alerts for your county or state; a national alert anywhere |
+| Duke Energy outages (Duke's public ArcGIS layer) | local | 250 or more customers out within 15 mi |
+| NIFC wildfires | local | within 50 mi |
+| USGS earthquakes | local / national | magnitude 2.5+ within 100 mi; nationally 5.5+ in the US or 7.0+ anywhere |
+| State 511 (GA, NC; your own key) | local | crashes and closures within 25 mi |
+| FAA airport status (nasstatus.faa.gov) | national | ground stops at 5+ airports, or any ground stop, delay program or closure at your airports (GSP, CLT, ATL by default) |
+
+Nothing else: no news, no social media, no company status pages. DHS terrorism bulletins
+were left out because DHS publishes no machine-readable feed. Crashes and police or fire
+activity in South Carolina come later from the radio helper.
+
+## Sounds
+
+Two sounds, used the same way everywhere. A **beep** (high, clean) is about where you
+are; a **buzz** (low, rough) is about somewhere else or the machine itself. Twice means
+act on it.
+
+| Sound | Means |
+|---|---|
+| beep beep | a new warning or emergency that covers you or is ahead of you |
+| beep | any other new local item (advisory, storm report, outage, fire, quake) |
+| buzz | a new national item |
+| buzz buzz | the machine: DATA LINK or GPS changed, outside power lost |
+
+At most one sound of each kind per update, and items already seen never sound again.
 
 ## What it will never do
 
@@ -89,7 +123,7 @@ weather.
 ## Roadmap, in order
 
 1. Touch interface, battery level and speaker beeps (3.1.0); brightness and
-   shutdown on power loss (3.2.0).
+   shutdown on power loss (3.2.0); new tiles (3.3.0); strict alert sources (3.4.0).
 2. Drive recorder and a rolling error log.
 3. Check each live feed against the real service; fix what's wrong.
 4. Appliance hardening: clock-jump-proof timers, startup self-check.

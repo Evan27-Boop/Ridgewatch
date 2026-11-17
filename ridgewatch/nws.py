@@ -14,10 +14,11 @@ import ssl
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
-from . import __version__, geo
+from . import __version__, geo, sources
 from .settings import loc_key
 
 API = os.environ.get("RIDGEWATCH_API", "https://api.weather.gov").rstrip("/")
@@ -46,7 +47,11 @@ def user_agent(contact=""):
 
 def fetch_url(url, ua, parse, accept="application/geo+json", who="NWS",
               timeout=10, tries=3, sleep=time.sleep, limit=8 << 20):
-    """GET a URL with a time limit and a few patient retries; return parse(body)."""
+    """GET a URL with a time limit and a few patient retries; return parse(body).
+    Only hosts on the strict source list (sources.py) are ever asked."""
+    if not (sources.allowed(url) or url.startswith(API + "/")):
+        raise FetchError("%s is not on the source list" % (urllib.parse.urlsplit(url).hostname
+                                                           or url))
     problem, network = "no connection", True
     for attempt in range(tries):
         wait = 2 * (attempt + 1)
@@ -314,6 +319,7 @@ def parse_alerts(data, shapes=False):
             "sender": (p.get("senderName") or "").strip(),
             "description": (p.get("description") or "").strip(),
             "instruction": (p.get("instruction") or "").strip(),
+            "response": (p.get("response") or "").strip(),
         })
         if shapes:                      # keep the cache small: the shape, not the essay
             items[-1].update(rings=rings, description="", instruction="", area="")
