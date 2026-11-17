@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.1 (2026-11-17)
+
+- **A new warning is one double beep** (beep, short pause, beep) played as a single
+  sound, so the spacing is exact. Status changes stay a single beep.
+- **Full volume:** the beeps are written at near full scale, and the system volume is
+  set to 100% and unmuted at start-up (`"max_volume": false` turns that off).
+
 ## 3.3.0 (2026-11-17): new tiles
 
 - **Top row: SPEED, ELEV, COMPASS.** The GRADE tile is gone; the grade is a line in ELEV,

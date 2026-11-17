@@ -1,4 +1,4 @@
-# Ridgewatch 3.3.0
+# Ridgewatch 3.3.1
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.
@@ -43,9 +43,11 @@ show a dim dash and the reason.
 | DATA LINK | ONLINE, LIMITED, STALE, OFFLINE; while offline, the way back to where the internet last answered | |
 | GPS | 3D FIX, 2D FIX, NO FIX, NO GPS, OFF | |
 
-Sounds: two beeps for a new official warning; one beep when DATA LINK or GPS changes.
-They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is installed),
-or the terminal bell if there's no audio player.
+Sounds: a double beep for a new official warning; one beep when DATA LINK or GPS
+changes. They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is
+installed), or the terminal bell if there's no audio player. At start-up Ridgewatch turns
+the system volume all the way up; set `"max_volume": false` in `config.json` to leave it
+alone.
 
 On a machine with a battery, the top bar shows the level and whether it's charging:
 green when plugged in, amber on battery, red at 20% or less.

@@ -40,7 +40,8 @@ will also show police and fire radio calls as text.
 7. **Touch first.** Tap a tile to open its details, and a bar of large buttons along
    the bottom for the everyday controls. The keyboard still works as a backup.
 8. **Power, sound and brightness.** Shows the battery level and whether it is charging.
-   Beeps play through the speakers, not only the terminal bell. Screen brightness follows
+   Beeps play through the speakers at full volume, not only the terminal bell: a
+   double beep for a new warning, a single beep for a status change. Screen brightness follows
    the day and night looks. When outside power is lost (ignition off), it shuts down
    cleanly after 10 minutes unless power comes back or you tap KEEP RUNNING.
 9. **Radio (planned, not built).** A separate helper program turns scanner calls into

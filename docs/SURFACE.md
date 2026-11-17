@@ -51,13 +51,13 @@ echo 'font=DejaVu Sans Mono:size=13' > ~/.config/foot/foot.ini
 
 ## 5. Sound
 
-Ridgewatch plays its beeps with `aplay` (from alsa-utils). Check the speakers work and
-aren't muted:
+Ridgewatch plays its beeps with `aplay` (from alsa-utils) and turns the volume all the
+way up when it starts. Check the speakers work:
 
 ```
 aplay -l                                    # should list the internal sound card
-amixer sset Master unmute 80%
-aplay ~/.config/ridgewatch/beep.wav         # the file appears after Ridgewatch's first run
+aplay ~/.config/ridgewatch/alert.wav        # the warning double beep (made on first run)
+aplay ~/.config/ridgewatch/beep.wav         # the status beep
 ```
 
 If `aplay -l` lists no cards, install `sof-firmware` and reboot. alsa-utils saves the

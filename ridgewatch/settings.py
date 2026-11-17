@@ -80,6 +80,7 @@ class Store(object):
         if c.get("display") not in ("auto", "day", "night", "normal"):
             c["display"] = "auto"
         c["wildfires"] = bool(c.get("wildfires", True))
+        c["max_volume"] = bool(c.get("max_volume", True))     # turn the speakers all the way up
         # screen brightness (percent) for each look; False leaves the backlight alone
         bright = c.get("brightness", {}) if c.get("brightness", {}) is not False else False
         if bright is not False:

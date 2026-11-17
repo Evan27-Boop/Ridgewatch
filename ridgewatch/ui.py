@@ -103,7 +103,9 @@ class UI(Panels):
         self.off_warned = False                 # the one-minute-left beep
         self.shutdown_failed = False
         self.poweroff_cmd = POWEROFF_CMD
-        self.speaker = sound.Speaker(store.home, self._bell)
+        self.speaker = sound.Speaker(store.home, self._bell,
+                                     max_volume=store.config.get("max_volume", True))
+        self.alert_beeps = []                   # times to play the double beep (new warnings)
         self.backlight = backlight.Backlight() if store.config.get("brightness") else None
         self._moving_at = 0
         self.last_key = time.time()
@@ -436,10 +438,14 @@ class UI(Panels):
         self.alarm_label = label
         self.alarm_until = now + 15
         self.alarm_items = items
-        self.beeps = [now, now + 0.7]
+        self.alert_beeps = [now]                # one double beep
         self.dirty = True
 
     def ring(self, now):
+        while self.alert_beeps and self.alert_beeps[0] <= now:
+            self.alert_beeps.pop(0)
+            if not self.speaker.beep("alert"):
+                self.beeps = sorted(self.beeps + [now + 0.5])   # no speaker: two terminal bells
         while self.beeps and self.beeps[0] <= now:
             self.beeps.pop(0)
             self.speaker.beep()

@@ -636,8 +636,16 @@ class Surface(unittest.TestCase):
         self.assertEqual(sp.player, "aplay")
         w = wave.open(os.path.join(home, "beep.wav"))
         self.assertEqual((w.getnchannels(), w.getsampwidth()), (1, 2))
-        self.assertGreater(w.getnframes(), 1000)
+        single = w.getnframes()
+        frames = w.readframes(single)
         w.close()
+        loudest = max(abs(int.from_bytes(frames[i:i + 2], "little", signed=True))
+                      for i in range(0, len(frames), 2))
+        self.assertGreater(loudest, 30000)                   # near full scale
+        w = wave.open(os.path.join(home, "alert.wav"))
+        self.assertGreater(w.getnframes(), 2 * single)       # two beeps and a gap
+        w.close()
+        self.assertTrue(sp.beep("alert"))
         sp.beep()
         for p in sp.procs:
             p.wait()
