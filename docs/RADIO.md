@@ -89,7 +89,10 @@ if the site's voice channels spread wider, calls get missed. Then the fix is a s
 dongle.
 **If it fails:** move straight to the radio box (Phase 3) for decoding too.
 
-## Phase 2: RADIO tile, no text yet (Ridgewatch 3.5)
+## Phase 2: RADIO tile, no text yet
+
+Built only after Phase 1 passes and the hardening items ahead of it on the roadmap are
+done, and only under the radio contract in SPEC.md.
 
 - **Calls list:** time, talkgroup name, length, newest first; Fire / EMS / Law colored.
 - **Activity:** calls per group over the last 15 minutes, so a busy night stands out.

@@ -82,6 +82,32 @@ act on it.
 
 At most one sound of each kind per update, and items already seen never sound again.
 
+## Radio contract
+
+The radio is a guest: it can fail in any way without touching the rest.
+
+1. **Separate programs.** The decoder (trunk-recorder) is its own service, restarted
+   by the system if it crashes. Ridgewatch never starts, imports or talks to it.
+2. **One way, files only.** The decoder writes one audio file and one description file
+   per call into a calls folder; Ridgewatch only reads that folder. No network
+   connections or shared memory between them, and no new libraries in Ridgewatch.
+3. **A fixed format.** A call is accepted only if its description parses, has every
+   required field (talkgroup, start time, length, frequency) and its audio file exists
+   and is finished. Anything else is skipped and counted, never guessed at.
+4. **Strict limits.** Only talkgroups on your list are shown. Text is cleaned of control
+   characters and cut to length. Oversized files are ignored; a fixed number of calls
+   is kept in memory.
+5. **Contained failure.** All radio code is one module on its own thread; every error is
+   caught. The worst a radio fault can do is make the RADIO tile say RADIO ERROR and why.
+6. **Budgets.** The decoder runs at lower priority with processor and memory caps, so
+   the dashboard always wins. Audio is deleted after 24 hours; the folder has a size cap.
+7. **Off switch.** `"radio": false` (the default) means no radio code runs at all.
+8. **Tests first.** Recorded sample calls (good, broken, half-written, huge, odd
+   characters) and deliberate failures (decoder killed, folder missing, disk full).
+
+Radio never enters ALERTS and never beeps (until text exists, and then only on
+keywords). The plan, in phases with a test before each, is `docs/RADIO.md`.
+
 ## What it will never do
 
 - **No cloud, accounts or tracking.** Everything runs on the machine. The only network
@@ -127,12 +153,16 @@ weather.
 
 ## Roadmap, in order
 
-1. Touch interface, battery level and speaker beeps (3.1.0); brightness and
-   shutdown on power loss (3.2.0); new tiles (3.3.0); strict alert sources (3.4.0).
+Reliability before features. Radio Phase 1 is a test on the Surface (no code) and can
+run alongside any of this.
+
+1. Done: touch, battery and speaker sounds (3.1); brightness and shutdown on power loss
+   (3.2); new tiles (3.3); strict alert sources (3.4).
 2. Drive recorder and a rolling error log.
-3. Check each live feed against the real service; fix what's wrong.
-4. Appliance hardening: clock-jump-proof timers, startup self-check.
-5. Clean text before drawing (control and double-width characters).
+3. Check each live feed against the real service, using the recorder; fix what's wrong.
+4. Clean text before drawing (control and double-width characters).
+5. Appliance hardening: clock-jump-proof timers, startup self-check.
 6. Split the main controller into smaller parts.
-7. Radio, in phases (docs/RADIO.md): prove decoding on the Surface; calls and audio in
-   the RADIO tile; text on a separate radio box; other states.
+7. Radio Phase 2: calls and audio in the RADIO tile, under the radio contract (only
+   after Phase 1 passes).
+8. Radio Phases 3 and 4: text on a separate radio box; other states.
