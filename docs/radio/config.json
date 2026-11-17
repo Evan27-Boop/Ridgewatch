@@ -5,7 +5,7 @@
       "driver": "osmosdr",
       "device": "rtl=0",
       "center": 852500000,
-      "rate": 2560000,
+      "rate": 2400000,
       "gain": 40,
       "error": 0,
       "digitalRecorders": 4,

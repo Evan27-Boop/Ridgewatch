@@ -13,8 +13,20 @@ sudo pacman -S rtl-sdr
 rtl_test -t
 ```
 
-It should say "Found 1 device(s)" and name the R820T tuner. If it says the device is
-busy, unplug and replug it.
+It should say "Found 1 device(s)" and name the R820T tuner.
+
+- **Not found at all:** check `lsusb | grep -i rtl`. If it's missing, it's the hub or plug.
+- **"usb_claim_interface error -6":** the TV-tuner driver grabbed it. Free it now and
+  keep it from coming back:
+  ```
+  sudo modprobe -r dvb_usb_rtl28xxu
+  echo 'blacklist dvb_usb_rtl28xxu' | sudo tee /etc/modprobe.d/no-rtl-dvb.conf
+  ```
+- **"Failed to open" or permission errors:** add yourself to the `rtlsdr` group if it
+  exists (`sudo usermod -aG rtlsdr evan`, then log out and in).
+
+trunk-recorder's "Wrong rtlsdr device index given" means the same thing: it can't see
+or open the dongle. Get `rtl_test -t` working first.
 
 ## 2. Install trunk-recorder
 
