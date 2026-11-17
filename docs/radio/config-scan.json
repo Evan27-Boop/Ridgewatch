@@ -1,26 +1,41 @@
 {
   "ver": 2,
-  "sources": [{
-    "driver": "osmosdr",
-    "device": "rtl=0",
-    "center": 853000000,
-    "rate": 2400000,
-    "gain": 40,
-    "error": 0,
-    "digitalRecorders": 4,
-    "analogRecorders": 2
-  }],
-  "systems": [{
-    "shortName": "upstate",
-    "type": "p25",
-    "control_channels": [853600000, 853100000, 853962500, 853462500, 853800000,
-                         853262500, 853537500, 853750000, 853862500, 853625000, 851962500],
-    "modulation": "qpsk",
-    "talkgroupsFile": "talkgroups.csv",
-    "recordUnknown": false,
-    "hideEncrypted": false,
-    "compressWav": false
-  }],
+  "sources": [
+    {
+      "driver": "osmosdr",
+      "device": "rtl=0",
+      "center": 853550000,
+      "rate": 2400000,
+      "gain": 40,
+      "error": 0,
+      "digitalRecorders": 4,
+      "analogRecorders": 2
+    }
+  ],
+  "systems": [
+    {
+      "shortName": "upstate",
+      "type": "p25",
+      "control_channels": [
+        854612500,
+        853100000,
+        853600000,
+        853962500,
+        853462500,
+        853800000,
+        853262500,
+        853537500,
+        853750000,
+        853862500,
+        853625000
+      ],
+      "modulation": "qpsk",
+      "talkgroupsFile": "talkgroups.csv",
+      "recordUnknown": false,
+      "hideEncrypted": false,
+      "compressWav": false
+    }
+  ],
   "captureDir": "/home/evan/radio/calls",
   "logLevel": "info"
 }
