@@ -134,4 +134,5 @@ weather.
 4. Appliance hardening: clock-jump-proof timers, startup self-check.
 5. Clean text before drawing (control and double-width characters).
 6. Split the main controller into smaller parts.
-7. Radio helper and RADIO tile.
+7. Radio, in phases (docs/RADIO.md): prove decoding on the Surface; calls and audio in
+   the RADIO tile; text on a separate radio box; other states.
