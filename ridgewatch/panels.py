@@ -8,9 +8,12 @@ import re
 import textwrap
 import time
 
-from . import __version__, geo, hospitals, locate, sun, theme, views
+from . import __version__, geo, hospitals, locate, power, sun, theme, views
 from . import places as places_mod
 from .cluster import CLUSTER_MIN_H, CLUSTER_MIN_W, Cluster
+
+BAR_H = 3                       # the touch button bar along the bottom, in rows
+MIN_H = CLUSTER_MIN_H + 1 + BAR_H   # header + gauge cluster + button bar
 
 UNI = {
     "h": "─", "v": "│", "tl": "┌", "tr": "┐", "bl": "└", "br": "┘",
@@ -34,6 +37,9 @@ THEME = {
     "ok": (108, ""),
     "warn": (214, "bold"),
     "err": (203, "bold"),
+    "button": (245, ""),
+    "button_on": (108, ""),
+    "button_hit": (179, "bold"),
 }
 
 TEMP_256 = [(-100, 93), (10, 99), (25, 63), (33, 69), (40, 75), (50, 79), (60, 114),
@@ -194,10 +200,11 @@ class Panels(Cluster):
         except (curses.error, AttributeError):
             pass
         self.scr.erase()
+        self.hits, self.buttons, self.pick_rows = [], [], []
         H, W = self.scr.getmaxyx()
-        if not self.cluster_fits(H - 2, W):
-            text = "Window too small. Needs %dx%d; this is %dx%d." % (
-                CLUSTER_MIN_W, CLUSTER_MIN_H + 2, W, H)
+        ch = H - 1 - BAR_H                       # rows between the header and the button bar
+        if not self.cluster_fits(ch, W):
+            text = "Window too small. Needs %dx%d; this is %dx%d." % (CLUSTER_MIN_W, MIN_H, W, H)
             self.put(H // 2, max(0, (W - len(text)) // 2), text, "warn")
             self.scr.noutrefresh()
             curses.doupdate()
@@ -205,17 +212,17 @@ class Panels(Cluster):
         vl = self.view_loc()
         entry = self.store.entry(vl) if vl else {}
         self.draw_header(W, entry)
-        self.draw_footer(H, W)
+        self.draw_bar(H, W)
         if self.mode == "alerts":
-            self.draw_alerts_view(1, 0, H - 2, W, entry)
+            self.draw_alerts_view(1, 0, ch, W, entry)
         elif self.mode == "rain":
-            self.box_precip(1, 0, H - 2, W, entry)
+            self.box_precip(1, 0, ch, W, entry)
         else:
-            self.draw_main(1, 0, H - 2, W, entry)
+            self.draw_main(1, 0, ch, W, entry)
             if self.mode == "pick":
-                self.draw_picker(H, W)
+                self.draw_picker(ch + 1, W)
             elif self.mode == "save":
-                self.draw_save(H, W)
+                self.draw_save(ch + 1, W)
         self.scr.noutrefresh()
         curses.doupdate()
 
@@ -224,6 +231,9 @@ class Panels(Cluster):
         self.put(0, 0, g["h"] * W, "line")
         x = self.put(0, 2, " RIDGEWATCH ", "title")
         x = self.put(0, x, __version__ + " ", "dim")
+        bt = power.tag(self.power)
+        if bt:
+            x = self.put(0, x + 1, " %s " % bt[0], bt[1], curses.A_REVERSE | curses.A_BOLD) + 1
         if self.mode != "main":
             # the status boxes aren't on this screen: show both as colored tags instead
             for lab, (word, spec, _) in (("LINK", self.link_state()), ("GPS", self.gps_state())):
@@ -249,6 +259,8 @@ class Panels(Cluster):
             status, level = "No location set", "warn"
         if not flashing:
             level = {"busy": "ok"}.get(level, level)
+            if self.msg:                          # a short message takes the status spot
+                status, level = self.msg[0], self.msg[1]
         # the location name wins over the status text when space is tight
         name_need = min(len(name), 18) + 4 if name else 0
         room_for_status = right_end - x - name_need - 3
@@ -302,45 +314,33 @@ class Panels(Cluster):
             label = ""
         return name, label
 
-    def draw_footer(self, H, W):
-        g = self.g
-        y = H - 1
-        items = {
-            "main": [("f", "stop following" if self.follow else "follow"), ("l", "location"),
-                     ("r", "refresh"), ("a", "alerts"), ("p", "rain"), ("d", "display"),
-                     ("s", "save"), ("1-9", "saved"), ("q", "quit")],
-            "rain": [("esc", "back")],
-            "pick": [(g["updown"], "select"), ("enter", "open"), ("del", "forget saved"),
-                     ("esc", "back")],
-            "save": [("enter", "save"), ("ctrl+u", "clear"), ("esc", "cancel")],
-            "alerts": [(g["updown"], "scroll"), ("pgup/pgdn", "page"), ("esc", "back")],
-        }[self.mode]
-        x0 = 1
-        if self.driving:                          # only what's safe to press while moving
-            x0 = self.put(y, 1, " DRIVING ", "warn", curses.A_REVERSE) + 2
-            if self.mode == "main":
-                items = [("a", "alerts"), ("p", "rain"), ("d", "display"), ("r", "refresh"),
-                         ("q", "quit")]
-        msg_w = 0
-        if self.msg:
-            text, level, _ = self.msg
-            msg_w = min(len(text) + 2, W - 2)
-            self.put(y, W - msg_w - 1, " " + text[: msg_w - 2] + " ", level)
-        limit = W - msg_w - 1 - x0
-        last = items[-1]
-        keep, used = [], len(last[0]) + len(last[1]) + 3
-        for key, word in items[:-1]:
-            need = len(key) + len(word) + 3
-            if 1 + used + need > limit:
-                break
-            keep.append((key, word))
-            used += need
-        if 1 + used <= limit:
-            keep.append(last)
-        x = x0
-        for key, word in keep:
-            x = self.put(y, x, key, "hot")
-            x = self.put(y, x + 1, word, "label") + 2
+    def bar_buttons(self):
+        """[(action, label, spec)] for the button bar on this screen."""
+        if self.mode == "main":
+            return [("display", "DISPLAY", "button"), ("refresh", "REFRESH", "button"),
+                    ("follow", "FOLLOW GPS: ON" if self.follow else "FOLLOW GPS: OFF",
+                     "button_on" if self.follow else "button"),
+                    ("save", "SAVE HERE", "button"), ("places", "PLACES", "button")]
+        if self.mode in ("alerts", "pick"):
+            return [("back", "BACK", "button"), ("up", "UP", "button"),
+                    ("down", "DOWN", "button")]
+        if self.mode == "save":
+            return [("save_ok", "SAVE", "button"), ("back", "CANCEL", "button")]
+        return [("back", "BACK", "button")]
+
+    def draw_bar(self, H, W):
+        """Large touch buttons along the bottom, equal widths, BAR_H rows tall. The
+        button just tapped lights up for a moment so you know it registered."""
+        buttons = self.bar_buttons()
+        y, n, gap = H - BAR_H, len(buttons), 1
+        bw = (W - 2 - gap * (n - 1)) // n
+        x = 1
+        hit = self.pressed if self.pressed and time.time() < self.pressed[1] else None
+        for i, (action, label, spec) in enumerate(buttons):
+            w = bw if i < n - 1 else W - 1 - x          # the last one takes the leftover
+            self.big_badge(y, x, w, BAR_H, label, "button_hit" if hit and hit[0] == action else spec)
+            self.buttons.append((action, y, x, BAR_H, w))
+            x += w + gap
 
     # main screen --------------------------------------------------------
     def draw_main(self, y, x, h, w, entry):
@@ -348,7 +348,7 @@ class Panels(Cluster):
         if not self.view_loc() and not self.follow:
             self.box(y, x, h, w, "RIDGEWATCH", "line")
             self.put(y + 2, x + 3, "No location set.", "value")
-            self.put(y + 3, x + 3, "Press L to set one, or F to follow the GPS.", "value")
+            self.put(y + 3, x + 3, "Tap PLACES to pick one, or FOLLOW GPS to use the receiver.", "value")
             return
         self.draw_cluster(y, x, h, w, entry)
 
@@ -651,7 +651,7 @@ class Panels(Cluster):
             shown = rows[: ih - 1] if ih > 1 else rows[:1]
             hidden = len(rows) - len(shown)
             if ih > 1:
-                shown.append(([("+%d more %s press a" % (hidden, g["dot"]), "label")], ""))
+                shown.append(([("+%d more %s tap to see all" % (hidden, g["dot"]), "label")], ""))
             rows = shown
         return rows
 
@@ -761,12 +761,12 @@ class Panels(Cluster):
     def draw_picker(self, H, W):
         g = self.g
         p = self.pick
-        pw = min(W - 4, 66)
-        ph = min(H - 4, 20)
+        pw = min(W - 4, 90)
+        ph = min(H - 4, 26)
         px = (W - pw) // 2
         py = max(1, (H - ph) // 2)
         self.clear_area(py, px, ph, pw)
-        self.box(py, px, ph, pw, "location", "pick")
+        self.box(py, px, ph, pw, "places", "pick")
         iy, ix, ih, iw = py + 1, px + 2, ph - 2, pw - 4
         q = p["query"]
         shown_q = q[-(iw - 4):] if len(q) > iw - 4 else q
@@ -778,7 +778,7 @@ class Panels(Cluster):
         elif self.places.error and q.strip() and not places_mod.parse_coords(q):
             hint = (self.places.error + " - coordinates still work", "warn")
         else:
-            hint = ("town, ZIP, or coordinates like 34.6834, -82.8374", "dim")
+            hint = ("Tap a place. With a keyboard, type a town, ZIP or coordinates.", "dim")
         self.put(iy + 1, ix, hint[0][:iw], hint[1])
         self.put(iy + 2, ix, g["h"] * iw, "line")
         list_y, list_h = iy + 3, ih - 3
@@ -795,19 +795,23 @@ class Panels(Cluster):
                 self.put(list_y + i, ix, t[:iw], "label")
             return
         sel = p["sel"]
+        cap = max(1, list_h // 2)            # each choice is 2 rows tall: an easier tap target
+        p["page"] = cap
         if sel < p["top"]:
             p["top"] = sel
-        if sel >= p["top"] + list_h:
-            p["top"] = sel - list_h + 1
+        if sel >= p["top"] + cap:
+            p["top"] = sel - cap + 1
         tags = {"saved": ("saved", "loc"), "town": ("town ", "label"),
                 "zip": ("zip  ", "label"), "coords": ("spot ", "label"),
                 "follow": ("live ", "ok")}
-        for row, i in enumerate(range(p["top"], min(len(items), p["top"] + list_h))):
+        for row, i in enumerate(range(p["top"], min(len(items), p["top"] + cap))):
             kind, loc, detail, hint = items[i]
-            yy = list_y + row
+            yy = list_y + 2 * row
+            self.pick_rows.append((yy, ix - 1, iw + 2, i))
             rev = curses.A_REVERSE if i == sel else 0
             if rev:
                 self.put(yy, ix - 1, " " * (iw + 2), "value", rev)
+                self.put(yy + 1, ix - 1, " " * (iw + 2), "value", rev)
             tag, tspec = tags[kind]
             x = self.put(yy, ix, tag + " ", tspec, rev)
             right = hint or detail
@@ -826,7 +830,7 @@ class Panels(Cluster):
             if right:
                 self.put(yy, ix + iw - len(right), right,
                          "err" if kind == "coords" else "dim", rev)
-        if len(items) > list_h:
+        if len(items) > cap:
             more = " %d/%d " % (sel + 1, len(items))
             self.put(py + ph - 1, px + pw - len(more) - 2, more, "label")
 

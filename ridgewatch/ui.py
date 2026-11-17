@@ -8,13 +8,17 @@ import queue
 import re
 import time
 
-from . import feeds, follow, geo, hospitals, locate, nws, settings, sun, theme, views
+from . import feeds, follow, geo, hospitals, locate, nws, power, settings, sound, sun, theme, views
 from . import places as places_mod
 from .panels import UNI, Palette, Panels
 
 
 STATUS_HOLD = 5.0                   # seconds a new DATA LINK / GPS word must last to beep
 STATUS_QUIET = ("CHECKING", "STANDBY", "OFF")  # changes to or from these never beep
+
+MOVING_RETURN_SEC = 30             # while moving, a detail screen returns to the gauges after this
+PRESS_SHOW_SEC = 0.35               # how long a tapped button stays lit
+POWER_EVERY_SEC = 30                # how often the battery level is read
 
 CLIMB_STEP_M = 3.0                  # elevation must move this much to count (GPS altitude jitters)
 
@@ -83,8 +87,13 @@ class UI(Panels):
         self.display = opts.get("display") or store.config.get("display", "auto")
         self.look = None
         self._look_at = 0
-        # driving: menus lock while the GPS says you're moving
+        # driving: the GPS says you're moving (detail screens time out back to the gauges)
         self.driving = False
+        # touch: where the tappable things were drawn (filled in by draw), the last tap
+        self.hits, self.buttons, self.pick_rows = [], [], []
+        self.pressed = None                     # (action, lit until)
+        self.power, self._power_at = None, 0.0
+        self.speaker = sound.Speaker(store.home, self._bell)
         self._moving_at = 0
         self.last_key = time.time()
         # storm warnings around you (and which ones ahead you've been told about)
@@ -416,10 +425,31 @@ class UI(Panels):
     def ring(self, now):
         while self.beeps and self.beeps[0] <= now:
             self.beeps.pop(0)
-            try:
-                curses.beep()
-            except (curses.error, AttributeError):
-                pass
+            self.speaker.beep()
+
+    @staticmethod
+    def _bell():
+        try:
+            curses.beep()
+        except (curses.error, AttributeError):
+            pass
+
+    def moving_guard(self, now):
+        """While moving, a detail screen or list goes back to the gauges after
+        MOVING_RETURN_SEC without a tap or key, so the gauges are never hidden for long."""
+        if self.driving and self.mode in ("alerts", "rain", "pick", "save") and \
+                (self.view_loc() or self.follow) and now - self.last_key > MOVING_RETURN_SEC:
+            self.mode = "main"
+            self.dirty = True
+
+    def power_tick(self, now):
+        if now - self._power_at < POWER_EVERY_SEC:
+            return
+        self._power_at = now
+        b = power.battery()
+        if b != self.power:
+            self.power = b
+            self.dirty = True
 
     def status_tick(self, now):
         """One beep when the DATA LINK or GPS box settles on a new word (warnings beep
@@ -448,6 +478,11 @@ class UI(Panels):
             pass
         self.scr.keypad(True)
         self.scr.timeout(200)
+        try:                                     # taps arrive as mouse clicks
+            curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
+            curses.mouseinterval(0)              # report the press at once, don't wait for a click
+        except (curses.error, AttributeError):
+            pass
         if self.loc is None and not self.follow:
             self.open_picker()
         try:
@@ -465,17 +500,17 @@ class UI(Panels):
                         self.next_alerts = now + follow.ALERTS_EVERY_SEC
                 if not self.follow:
                     self.driving_tick(now)
-                if self.driving and self.mode in ("alerts", "rain") and \
-                        now - self.last_key > 20:
-                    self.mode = "main"                # back to the main view while moving
-                    self.dirty = True
+                self.moving_guard(now)
                 self.look_tick(now)
+                self.power_tick(now)
                 self.feeds_tick(now)
                 self.nearby_tick(now)
                 self.status_tick(now)
                 self.ring(now)
                 # redraw fast while flashing, slowly when idle (easy on a laptop battery)
                 every = 0.25 if self.alarm_on() else 1.0 if (self.fetcher.busy or self.msg) else 5.0
+                if self.pressed and now < self.pressed[1] + 0.3:
+                    every = 0.1                       # unlight the tapped button on time
                 if self.dirty or now - self.last_draw >= every:
                     self.draw()
                 key = self.read_key()
@@ -507,6 +542,14 @@ class UI(Panels):
             if ch == "\x03":
                 return "quit"
             return ch
+        if ch == curses.KEY_MOUSE:
+            try:
+                _, x, y, _, state = curses.getmouse()
+            except curses.error:
+                return None
+            if state & (curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED):
+                return ("tap", y, x)
+            return None
         names = {
             curses.KEY_UP: "up", curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pgup",
             curses.KEY_NPAGE: "pgdn", curses.KEY_HOME: "home", curses.KEY_END: "end",
@@ -658,7 +701,7 @@ class UI(Panels):
     def gps_state(self):
         """(word, color spec, detail) for the GPS box."""
         if not self.follow:
-            return "OFF", "label", "Follow mode is off. Press F."
+            return "OFF", "label", "Follow mode is off. Tap FOLLOW GPS."
         fix = self.fix
         kind, text = self.locator.gps_status() if self.locator else ("none", "no GPS")
         if fix and fix.source == "gps" and kind == "fix":
@@ -728,16 +771,83 @@ class UI(Panels):
             return None
         self.dirty = True
         self.last_key = time.time()
+        if isinstance(k, tuple):
+            if self.alarm_on():
+                self.alarm_until = 0             # the first tap only silences a new warning
+                return None
+            return self.tap(k[1], k[2])
         if self.alarm_on():
             self.alarm_until = 0                 # any key acknowledges a new warning
         return getattr(self, "key_" + self.mode)(k)
 
+    # ----------------------------------------------------------- touch --
+    @staticmethod
+    def _inside(y, x, ry, rx, rh, rw):
+        return ry <= y < ry + rh and rx <= x < rx + rw
+
+    def tap(self, y, x):
+        """A tap at screen row y, column x: a bar button, a tile, or a row in a list."""
+        for action, by, bx, bh, bw in self.buttons:
+            if self._inside(y, x, by, bx, bh, bw):
+                self.pressed = (action, time.time() + PRESS_SHOW_SEC)
+                return self.press(action)
+        if self.mode == "main":
+            for name, ty, tx, th, tw in self.hits:
+                if self._inside(y, x, ty, tx, th, tw):
+                    return self.key_main({"alerts": "a", "weather": "p"}[name])
+        elif self.mode == "pick":
+            for ry, rx, rw, i in self.pick_rows:
+                if self._inside(y, x, ry, rx, 2, rw):
+                    self.pick["sel"] = i
+                    return self.key_pick("enter")
+        elif self.mode in ("alerts", "rain"):
+            return None                          # reading: taps on the text do nothing
+        return None
+
+    def press(self, action):
+        """What each bar button does. Most reuse the key that does the same thing."""
+        if action == "save":
+            return self.save_here()
+        if action == "places":
+            self.open_picker()
+            return None
+        if action == "save_ok":
+            return self.key_save("enter")
+        if action == "back":
+            return getattr(self, "key_" + self.mode)("esc")
+        if action in ("up", "down"):
+            return getattr(self, "key_" + self.mode)("pgup" if action == "up" else "pgdn")
+        return self.key_main({"display": "d", "refresh": "r", "follow": "f"}[action])
+
+    def save_here(self):
+        """SAVE HERE: keep this spot under the nearest town's name, without typing."""
+        if self.follow:
+            if not self.fix:
+                self.flash("No GPS position to save yet", "warn")
+                return None
+            name = self.place_label(self.fix.lat, self.fix.lon)[0]
+            target = settings.make_location(name, self.fix.lat, self.fix.lon, name)
+        elif self.loc:
+            target, name = self.loc, self.loc["name"]
+            if self.store.saved_index(self.loc) >= 0:
+                self.flash("%s is already saved. Find it under PLACES." % name)
+                return None
+        else:
+            self.flash("Set a location first. Tap PLACES.", "warn")
+            return None
+        saved = self.store.save_location(target, name[:32])
+        if not self.follow:
+            self.loc = saved
+            self.store.config["last"] = self.loc
+        if self.store.save_config():
+            self.flash("Saved as %s. Find it under PLACES." % name[:32])
+        else:
+            self.flash("Could not write the settings file", "err")
+        return None
+
     def key_main(self, k):
         if k in ("q", "Q", "quit"):
             return "quit"
-        if self.driving and isinstance(k, str) and len(k) == 1 and k in "fFlL/sS123456789":
-            self.flash("Locked while moving", "warn")
-            return None
         if k in ("d", "D"):
             i = theme.MODES.index(self.display) if self.display in theme.MODES else 0
             self.display = theme.MODES[(i + 1) % len(theme.MODES)]
@@ -750,7 +860,7 @@ class UI(Panels):
                 self.start_fetch()
                 self.flash("Waiting for a GPS fix", "warn")
             elif not self.view_loc():
-                self.flash("Set a location first. Press L.", "warn")
+                self.flash("Set a location first. Tap PLACES.", "warn")
             elif self.fetcher.busy:
                 self.flash("Update already in progress")
             else:
@@ -781,7 +891,7 @@ class UI(Panels):
                     self.save_text = label[:32]
                     self.mode = "save"
             elif not self.loc:
-                self.flash("Set a location first. Press L.", "warn")
+                self.flash("Set a location first. Tap PLACES.", "warn")
             else:
                 self.save_target = self.loc
                 i = self.store.saved_index(self.loc)
@@ -797,7 +907,7 @@ class UI(Panels):
             if n <= len(saved):
                 self.set_location(saved[n - 1])
             else:
-                self.flash("No saved location %d. Press S to save one." % n, "warn")
+                self.flash("No saved location %d. Tap SAVE HERE to save one." % n, "warn")
         return None
 
     def key_rain(self, k):
@@ -829,13 +939,10 @@ class UI(Panels):
                 self.loc = saved
                 self.store.config["last"] = self.loc
             ok = self.store.save_config()
-            i = self.store.saved_index(saved) + 1
             if not ok:
                 self.flash("Could not write the settings file", "err")
-            elif i <= 9:
-                self.flash("Saved as %s. Press %d to return here." % (name, i))
             else:
-                self.flash("Saved as %s" % name)
+                self.flash("Saved as %s. Find it under PLACES." % name)
             self.mode = "main"
         elif k == "backspace":
             self.save_text = self.save_text[:-1]
@@ -893,11 +1000,12 @@ class UI(Panels):
                 p["query"] = ""
                 self.refresh_pick()
             else:
-                self.flash("Set a location to start, or press Ctrl+C to quit", "warn")
+                self.flash("Pick a place or follow the GPS to start", "warn")
         elif k == "quit":
             return "quit"
         elif k in ("up", "down", "pgup", "pgdn", "home", "end") and n:
-            step = {"up": -1, "down": 1, "pgup": -8, "pgdn": 8, "home": -n, "end": n}[k]
+            page = p.get("page") or 8
+            step = {"up": -1, "down": 1, "pgup": -page, "pgdn": page, "home": -n, "end": n}[k]
             p["sel"] = max(0, min(n - 1, p["sel"] + step))
         elif k == "enter":
             if not n:

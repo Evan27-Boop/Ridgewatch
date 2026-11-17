@@ -20,7 +20,7 @@ sys.path.insert(0, ROOT)
 from tests.fake_nws import (FakeNWS, alert, alerts, fires, grid, hourly, obs,  # noqa: E402
                             points, road_events, stations)
 from ridgewatch import (feeds, follow, geo, hospitals, locate, nws, panels,  # noqa: E402
-                        places, plain, settings, sun, theme, ui, views)
+                        places, plain, power, settings, sound, sun, theme, ui, views)
 from ridgewatch.panels import UNI  # noqa: E402
 
 
@@ -567,6 +567,97 @@ class Reports(unittest.TestCase):
         self.assertEqual(rs[1]["where"], "4 mi ahead")
 
 
+class Surface(unittest.TestCase):
+    """Battery, speaker beeps and the moving guard (the Surface Go 2 setup)."""
+
+    def sysfs(self, entries):
+        base = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, base, True)
+        for name, files in entries.items():
+            os.makedirs(os.path.join(base, name))
+            for k, v in files.items():
+                with open(os.path.join(base, name, k), "w") as f:
+                    f.write(v + "\n")
+        return base
+
+    def test_battery_levels(self):
+        base = self.sysfs({"ADP1": {"type": "Mains", "online": "1"},
+                           "BAT1": {"type": "Battery", "capacity": "82", "status": "Charging"}})
+        b = power.battery(base)
+        self.assertEqual(b, {"pct": 82, "charging": True, "external": True})
+        self.assertEqual(power.tag(b), ("BATT 82% CHARGING", "ok"))
+        base = self.sysfs({"ADP1": {"type": "Mains", "online": "1"},       # Battery Limit at 50%
+                           "BAT1": {"type": "Battery", "capacity": "50", "status": "Not charging"}})
+        self.assertEqual(power.tag(power.battery(base)), ("BATT 50% PLUGGED IN", "ok"))
+        base = self.sysfs({"ADP1": {"type": "Mains", "online": "0"},
+                           "BAT1": {"type": "Battery", "capacity": "64", "status": "Discharging"}})
+        self.assertEqual(power.tag(power.battery(base)), ("BATT 64% ON BATTERY", "warn"))
+        base = self.sysfs({"BAT1": {"type": "Battery", "capacity": "15", "status": "Discharging"}})
+        self.assertEqual(power.tag(power.battery(base))[1], "err")
+        base = self.sysfs({"hid-mouse": {"type": "Battery", "scope": "Device", "capacity": "5"}})
+        self.assertIsNone(power.battery(base))              # a mouse's battery isn't ours
+        self.assertIsNone(power.battery("/no/such/folder"))
+        self.assertIsNone(power.tag(None))
+
+    def test_speaker_plays_or_falls_back(self):
+        import wave
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        rang = []
+        sp = sound.Speaker(home, lambda: rang.append(1), which=lambda p: None)
+        sp.beep()
+        self.assertEqual(rang, [1])                         # no player: the terminal bell
+        true = shutil.which("true")
+        sp = sound.Speaker(home, lambda: rang.append(2),
+                           which=lambda p: true if p == "aplay" else None)
+        self.assertEqual(sp.player, "aplay")
+        w = wave.open(os.path.join(home, "beep.wav"))
+        self.assertEqual((w.getnchannels(), w.getsampwidth()), (1, 2))
+        self.assertGreater(w.getnframes(), 1000)
+        w.close()
+        sp.beep()
+        for p in sp.procs:
+            p.wait()
+        self.assertEqual(rang, [1])                         # played, no bell
+        false = shutil.which("false")
+        sp = sound.Speaker(home, lambda: rang.append(3),
+                           which=lambda p: false if p == "pw-play" else None)
+        for _ in range(4):                                  # a player that keeps failing is dropped
+            sp.beep()
+            for p in sp.procs:
+                p.wait()
+        self.assertIn(3, rang)
+
+    def test_moving_guard(self):
+        now = time.time()
+        st = types.SimpleNamespace(driving=True, mode="alerts", follow=True, last_key=now - 10,
+                                   view_loc=lambda: {"lat": 1, "lon": 2}, dirty=False)
+        ui.UI.moving_guard(st, now)
+        self.assertEqual(st.mode, "alerts")                 # still reading
+        ui.UI.moving_guard(st, now + 25)
+        self.assertEqual(st.mode, "main")                   # 30 s without a tap: back to the gauges
+        st.mode, st.driving = "pick", False
+        ui.UI.moving_guard(st, now + 600)
+        self.assertEqual(st.mode, "pick")                   # parked: stays as long as you like
+
+    def test_first_tap_only_silences_a_warning(self):
+        taps = []
+        st = types.SimpleNamespace(dirty=False, last_key=0, alarm_until=time.time() + 10,
+                                   tap=lambda y, x: taps.append((y, x)))
+        st.alarm_on = lambda: time.time() < st.alarm_until
+        ui.UI.handle(st, ("tap", 5, 5))
+        self.assertEqual(taps, [])                          # silenced, nothing else happened
+        ui.UI.handle(st, ("tap", 5, 5))
+        self.assertEqual(taps, [(5, 5)])
+
+    def test_bar_buttons(self):
+        st = types.SimpleNamespace(mode="main", follow=True)
+        labels = [b[1] for b in panels.Panels.bar_buttons(st)]
+        self.assertEqual(labels, ["DISPLAY", "REFRESH", "FOLLOW GPS: ON", "SAVE HERE", "PLACES"])
+        st.mode = "alerts"
+        self.assertEqual([b[0] for b in panels.Panels.bar_buttons(st)], ["back", "up", "down"])
+
+
 class EndToEnd(unittest.TestCase):
     """The text report against the fake NWS: fetch, parse, save, show."""
 
@@ -619,10 +710,13 @@ class EndToEnd(unittest.TestCase):
 class Dashboard(unittest.TestCase):
     """Starts the real full screen in a pseudo-terminal and quits with q."""
 
-    def run_app(self, args, keys=b"", seconds=3.0, size=(47, 156), term="xterm-256color"):
+    def run_app(self, args, keys=b"", seconds=3.0, size=(47, 156), term="xterm-256color",
+                mode=None):
         import pty
         import select
         fake = FakeNWS().start()
+        if mode:
+            fake.mode = mode
         home = tempfile.mkdtemp()
         try:
             env = dict(os.environ, RIDGEWATCH_API=fake.url, RIDGEWATCH_FEEDS=fake.url,
@@ -637,7 +731,10 @@ class Dashboard(unittest.TestCase):
                 fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", size[0], size[1], 0, 0))
                 os.execve(sys.executable, [sys.executable, "-m", "ridgewatch", "--home", home] + args,
                           env)
-            out, end, sent = b"", time.time() + seconds, False
+            # keys: bytes sent halfway through, or a list of chunks sent 0.8 s apart (taps)
+            chunks = list(keys) if isinstance(keys, list) else [keys]
+            out, end = b"", time.time() + seconds
+            next_at = end - seconds / 2
             while time.time() < end:
                 r, _, _ = select.select([fd], [], [], 0.1)
                 if r:
@@ -645,9 +742,9 @@ class Dashboard(unittest.TestCase):
                         out += os.read(fd, 65536)
                     except OSError:
                         break
-                if not sent and time.time() > end - seconds / 2:
-                    os.write(fd, keys)
-                    sent = True
+                if chunks and time.time() > next_at:
+                    os.write(fd, chunks.pop(0))
+                    next_at = time.time() + 0.8
             status = None
             for _ in range(20):                      # q backs out of a view, then quits
                 os.write(fd, b"q")
@@ -700,10 +797,39 @@ class Dashboard(unittest.TestCase):
         self.assertIn("STANDBY", out)                        # not OFFLINE: nothing to ask yet
         self.assertIn("NO GPS", out)
 
+    @staticmethod
+    def tap(y, x):
+        """A touch at row y, column x, as foot reports it (an SGR mouse press and release)."""
+        return ("\x1b[<0;%d;%dM\x1b[<0;%d;%dm" % (x + 1, y + 1, x + 1, y + 1)).encode()
+
+    def test_touch_save_here_and_places(self):
+        # 156x47: the bar is rows 44-46, five buttons about 31 columns wide
+        keys = [self.tap(45, 105), self.tap(45, 140), self.tap(45, 20)]   # SAVE HERE, PLACES, BACK
+        code, out, crashed = self.run_app(["--place", "clemson sc"], keys=keys, seconds=6,
+                                          mode={"alerts": "none"})   # no alarm to silence first
+        self.assertEqual((code, crashed), (0, False))
+        self.assertIn("Saved as Clemson, SC. Find it under PLACES.", out)
+        self.assertIn(" places ", out)                       # the picker opened
+        self.assertIn("Clemson, SC  key 1", out)              # the saved place is listed
+
+    def test_touch_tiles_and_follow(self):
+        code, out, crashed = self.run_app(["--place", "clemson sc"],
+                                          keys=[self.tap(24, 60), self.tap(45, 20)], seconds=5,
+                                          mode={"alerts": "none"})
+        self.assertEqual((code, crashed), (0, False))
+        self.assertIn("alerts " + UNI["dot"] + " Clemson, SC", out)   # ALERTS tile opened the list
+        self.assertIn("BACK", out)
+        # PLACES, then tap the first choice (follow the GPS)
+        code, out, crashed = self.run_app(["--place", "clemson sc"],
+                                          keys=[self.tap(45, 140), self.tap(13, 78)], seconds=5,
+                                          mode={"alerts": "none"})
+        self.assertEqual((code, crashed), (0, False))
+        self.assertIn("FOLLOW GPS: ON", out)
+
     def test_small_window_asks_for_more_room(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"], size=(24, 80))
         self.assertEqual((code, crashed), (0, False))
-        self.assertIn("Window too small. Needs 120x36; this is 80x24.", out)
+        self.assertIn("Window too small. Needs 120x38; this is 80x24.", out)
 
     def test_needs_256_colors(self):
         code, out, crashed = self.run_app(["--place", "clemson sc"], term="vt100", seconds=1.5)

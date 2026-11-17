@@ -1,4 +1,4 @@
-# Ridgewatch 3.0.1
+# Ridgewatch 3.1.0
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.
@@ -7,6 +7,7 @@ Linux only, Python standard library only, nothing to install.
 ![The dashboard](docs/screen.png)
 
 `SPEC.md` says what Ridgewatch is for and what it will never do. Read that first.
+`docs/SURFACE.md` sets up a Surface Go 2 as a dedicated touchscreen display.
 
 ## Run it
 
@@ -18,7 +19,7 @@ Linux only, Python standard library only, nothing to install.
 ./rw --plain                one-shot text report
 ```
 
-It needs Python 3.8+, a 256-color UTF-8 terminal and a window of at least 120×36.
+It needs Python 3.8+, a 256-color UTF-8 terminal and a window of at least 120×38.
 On WSL, Windows Terminal works as is. Settings and saved data live in
 `~/.config/ridgewatch` (or wherever `--home` points).
 
@@ -42,20 +43,39 @@ show a dim dash and the reason.
 | GPS | 3D FIX, 2D FIX, NO FIX, NO GPS, OFF | |
 
 Sounds: two beeps for a new official warning; one beep when DATA LINK or GPS changes.
+They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is installed),
+or the terminal bell if there's no audio player.
+
+On a machine with a battery, the top bar shows the level and whether it's charging:
+green when plugged in, amber on battery, red at 20% or less.
+
+## Touch
+
+Everything day to day works by tapping. Tap **ALERTS** for the full alert list and
+**WEATHER** for the rain outlook. The bar along the bottom has **DISPLAY** (day, night,
+auto), **REFRESH**, **FOLLOW GPS** (on or off), **SAVE HERE** (saves this spot under the
+nearest town's name) and **PLACES** (your saved places and following the GPS, as a list
+to tap). Detail screens have **BACK**, and **UP** / **DOWN** where there's a list.
+
+The first tap during a new warning only silences it. Controls work at any speed, but
+while you're moving a detail screen goes back to the gauges after 30 seconds without a
+tap. There is no quit button.
 
 ## Keys
 
-`f` follow the GPS on/off · `l` pick a place · `a` alert details · `p` rain graph ·
-`d` day / night / auto colors · `r` refresh · `s` save this place · `1`-`9` saved places ·
-`q` quit. While you're moving, only `a p d r q` work.
+A keyboard still works: `f` follow the GPS on/off · `l` pick a place (and type to search
+towns, ZIP codes or coordinates) · `a` alert details · `p` rain graph ·
+`d` day / night / auto colors · `r` refresh · `s` save this place with a name you type ·
+`1`-`9` saved places · `q` quit.
 
 ## GPS
 
-Plug in a USB GPS receiver and press `f`. The port is found automatically
-(`/dev/ttyACM0` and friends). Your user needs to be in the `dialout` group:
+Plug in a USB GPS receiver and tap FOLLOW GPS (or press `f`). The port is found
+automatically (`/dev/ttyACM0` and friends). Your user needs permission to use serial
+ports: the `uucp` group on Arch, `dialout` on Debian and Ubuntu.
 
 ```
-sudo usermod -aG dialout $USER     # then log out and back in
+sudo usermod -aG uucp $USER       # Arch; then log out and back in
 ```
 
 For a fixed name that survives replugging, add a udev rule that creates `/dev/ttyGPS`;
@@ -79,7 +99,7 @@ pick a place with `l` and the GPS gauges show a dash.
 ```
 rw                       launcher
 ridgewatch/cli.py        command line, crash log
-ridgewatch/ui.py         the main loop, follow mode, alarms, keys
+ridgewatch/ui.py         the main loop, follow mode, alarms, keys and taps
 ridgewatch/cluster.py    the gauge-cluster screen and big digits
 ridgewatch/panels.py     colors, the frame, weather and status boxes, detail screens
 ridgewatch/views.py      turns saved data into what the screen shows
@@ -89,6 +109,8 @@ ridgewatch/locate.py     the GPS reader (background thread, reconnects by itself
 ridgewatch/follow.py     when to refetch as you move
 ridgewatch/places.py     offline towns and ZIP codes
 ridgewatch/hospitals.py  offline emergency rooms
+ridgewatch/sound.py      beeps through the speakers
+ridgewatch/power.py      battery level
 ridgewatch/geo.py sun.py theme.py settings.py plain.py   small helpers
 tools/                   rebuild the bundled town and hospital files
 tests/                   python3 -m unittest

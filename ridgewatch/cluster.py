@@ -85,7 +85,7 @@ class Cluster(object):
     @staticmethod
     def cluster_plan(h):
         """Row heights for the bands, top to bottom, for `h` rows of screen."""
-        drows = 6 if h >= 40 else 4
+        drows = 6 if h >= 38 else 4
         ah = 8 if h >= 43 else 7 if h >= 39 else 6
         gh = drows + 5
         wh = h - gh - 10 - ah
@@ -108,8 +108,10 @@ class Cluster(object):
         self.tile_er(y, x + g1, p["signal"], w - g1)
         y += p["signal"]
         self.cluster_alerts(y, x, p["alerts"], w, entry)
+        self.hits.append(("alerts", y, x, p["alerts"], w))
         y += p["alerts"]
         self.box_weather(y, x, p["weather"], lw, entry, title="WEATHER", spacer=True)
+        self.hits.append(("weather", y, x, p["weather"], lw))
         self.box_status(y, x + lw, p["weather"], sw)
 
     # ------------------------------------------------------------ helpers --
@@ -152,7 +154,7 @@ class Cluster(object):
 
     def no_speed_reason(self, fix):
         if not self.follow:
-            return "Follow mode is off. Press F to use the GPS."
+            return "Follow mode is off. Tap FOLLOW GPS."
         if fix is None:
             return "No GPS position"
         return "No speed from the GPS"
@@ -312,7 +314,7 @@ class Cluster(object):
             self.box(y, x, h, w, "HERE", "warn")
             self.put(y + 1, x + 2, "No position"[: w - 4], "warn")
             status = dot.join(self.locator.describe()) if self.locator else ""
-            self.put(y + 2, x + 2, (status + ". Press L to set a location.")[: w - 4], "label")
+            self.put(y + 2, x + 2, (status + ". Tap PLACES to set a location.")[: w - 4], "label")
             return
         place, county = self.place_label(vl["lat"], vl["lon"])
         lost = self.follow and not fix
@@ -334,7 +336,7 @@ class Cluster(object):
                     parts.append((" ~%d min" % max(1, round(mi / spd * 60)), "label"))
             line2 = parts
         elif not self.follow:
-            line2 = [("Set location. Press F to follow the GPS.", "label")]
+            line2 = [("Picked location, not live. Tap FOLLOW GPS to use the receiver.", "label")]
         elif fix:
             line2 = [("Stationary. Towns ahead appear while moving.", "label")]
         else:
@@ -363,7 +365,7 @@ class Cluster(object):
         elif self.follow:
             text = "Last known position"
         else:
-            text = "Set location"
+            text = "Picked location"
         self.put(y + 3, x + 2, text[:iw], "label")
 
     def tile_signal(self, y, x, h, w):
@@ -403,7 +405,7 @@ class Cluster(object):
         g = self.g
         if not a["known"]:
             if self.follow and not self.view_loc():
-                return "NO LOCATION", "warn", "Alerts need a position", "Connect a GPS or press L"
+                return "NO LOCATION", "warn", "Alerts need a position", "Connect a GPS or tap PLACES"
             if self.fetcher.busy:
                 return "CHECKING", "label", "", ""
             if a["error"] in views.OFFLINE_ERRORS:

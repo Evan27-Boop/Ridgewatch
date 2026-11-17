@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.1.0 (2026-11-17): touch
+
+Built for the Surface Go 2 as a dedicated touchscreen display.
+
+- **Touch.** Tap ALERTS or WEATHER to open their details. A bar of large buttons along
+  the bottom: DISPLAY, REFRESH, FOLLOW GPS, SAVE HERE and PLACES. Detail screens get
+  BACK, UP and DOWN. A tapped button lights up so you know it registered. The keyboard
+  still works.
+- **SAVE HERE** saves the spot under the nearest town's name, with no typing.
+  **PLACES** lists saved places and following the GPS as rows to tap (two rows tall,
+  so they're easy to hit).
+- **Nothing locks while moving** any more. Instead, while moving, a detail screen or the
+  places list goes back to the gauges after 30 seconds without a tap.
+- **The first tap during a new warning only silences it**, so it can't open something
+  by accident.
+- **Beeps play through the speakers** with `pw-play`, `paplay` or `aplay`; the terminal
+  bell is the fallback. (foot under cage doesn't sound the bell.)
+- **Battery level** in the top bar on machines with a battery.
+- Short messages now show in the top bar, where the update status goes. Messages say
+  "tap" instead of naming keys.
+- Big digits stay full height down to 38 rows of gauges, so they keep their size with the
+  button bar on a 42-line screen. The window now needs 120×38.
+
 ## 3.0.1 (2026-11-12)
 
 - **DATA LINK shows STANDBY** ("No location set") when there is no location yet, where it
