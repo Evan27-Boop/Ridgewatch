@@ -1,0 +1,28 @@
+Decimal,Hex,Alpha Tag,Mode,Description,Tag,Category
+26160,6630,Pickens Fire,D,Pickens County Fire,Fire-Tac,Pickens
+26128,6610,Pickens EMS,D,Pickens County EMS,EMS-Tac,Pickens
+26144,6620,Pickens ESD,D,Pickens County ESD,Emergency Ops,Pickens
+19856,4d90,Pickens Call,D,Pickens County Call,Interop,Pickens
+26208,6660,Easley PD 1,D,Easley PD Ch. 1,Law Dispatch,Pickens
+26096,65f0,Pickens PD,D,Pickens PD,Law Tac,Pickens
+26192,6650,Liberty PD,D,Liberty PD,Law Tac,Pickens
+26240,6680,Clemson PD,D,Clemson PD,Law Tac,Clemson
+26256,6690,ClemUniv PD,D,Clemson University PD,Law Tac,Clemson
+58576,e4d0,ClemUniv FD,D,Clemson University FD,Fire-Tac,Clemson
+62384,f3b0,AndCo Fire,D,Anderson County Fire,Fire-Tac,Anderson
+62368,f3a0,AndCo EMS,D,Anderson County EMS,EMS-Talk,Anderson
+62208,f300,AndCo SD Dis,D,Anderson Sheriff Dispatch 1,Law Dispatch,Anderson
+62224,f310,AndCo SD 2,D,Anderson Sheriff Dispatch 2,Law Dispatch,Anderson
+57792,e1c0,Anderson PD,D,Anderson PD Dispatch,Law Dispatch,Anderson
+53648,d190,Pendleton PD,D,Pendleton PD,Law Tac,Anderson
+52576,cd60,Seneca PD,D,Seneca PD,Law Tac,Oconee
+54512,d4f0,Gvl FD Dsp 1,D,Greenville FD Dispatch 1,Fire Dispatch,Greenville
+54528,d500,Gvl FD Dsp 2,D,Greenville FD Dispatch 2,Fire Dispatch,Greenville
+33296,8210,S Gvl FD,D,South Greenville FD Dispatch,Fire Dispatch,Greenville
+52768,ce20,Gvl Co SD A1,D,Greenville Sheriff A1,Law Tac,Greenville
+52784,ce30,Gvl Co SD B1,D,Greenville Sheriff B1,Law Tac,Greenville
+54768,d5f0,Gvl PD 3 Dsp,D,Greenville PD Dispatch,Law Dispatch,Greenville
+21136,5290,SCHP 33 ANDS,A,Highway Patrol Anderson,Law Dispatch,SCHP
+20880,5190,SCHP 36 GRVL,A,Highway Patrol Greenville,Law Dispatch,SCHP
+45744,b2b0,SHEP Trp 3,A,DPS Troop 3 SHEP,Law Tac,SCHP
+61072,ee90,SCHP 46 ACE3,DE,ACE Team Troop 3 (encrypted),Law Tac,SCHP

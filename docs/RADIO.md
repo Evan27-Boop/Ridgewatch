@@ -20,6 +20,42 @@ test on the real hardware, and nothing gets built until its test passes.
 - **Encrypted talkgroups are never decoded.** Many sheriff and police channels are;
   fire and EMS dispatch usually aren't.
 
+## Decisions (Nov 17, 2026)
+
+- **Hardware:** one RTL-SDR Blog V3 for now (a second only if Phase 1 shows missed
+  calls); a basic indoor antenna for Phase 1; a powered USB-C hub (charging pass-through)
+  for the GPS and SDR in the Jeep.
+- **Counties:** Pickens, Greenville, Anderson, Oconee.
+- **Agencies:** fire and EMS dispatch, sheriff and city police, Highway Patrol, Clemson
+  University and DNR.
+- **Encrypted talkgroups:** shown as activity only (time and talkgroup, no audio).
+- **Audio:** off by default; tap a call to hear it; a LIVE switch for scanner mode.
+- **Sound:** none for radio until there's text (Phase 3), then only on keywords.
+- **Audio kept:** 24 hours.
+- **Text (Phase 3):** decided after Phase 2.
+- **Trips (Phase 4):** western NC, Tennessee, Georgia, the rest of SC.
+- **NOAA warning codes:** not now.
+
+## Tower sites and the one-dongle limit
+
+From RadioReference's Palmetto 800 listing (control channels marked c). One RTL-SDR V3
+covers about 2.4 MHz; a site's channels must fit inside that, or calls get missed.
+
+| Site | County | Spread of its channels | One V3? |
+|---|---|---|---|
+| 024 Pickens | Pickens | 851.125–853.600 (c 853.600), 2.5 MHz | **just about**: all but the lowest channel |
+| 050 Seneca | Oconee | 851.075–853.9625 (c 853.100, 853.9625), 2.9 MHz | most |
+| 042 Anderson | Anderson | 854.1125–857.2625 (c 854.6125, 857.0125), 3.2 MHz | most |
+| 031 Caesars Head | Greenville | 851.3125–854.4625 (c 853.4625, 853.800), 3.2 MHz | most |
+| 035 Greenville Simulcast | Greenville | 851.1875–859.9625 (4 control), 8.8 MHz | **no**: a small share |
+| 017 Hogback | Greenville | 851.375–860.8375 (c 851.9625, 853.625), 9.5 MHz | **no** |
+
+So one V3 works well around Clemson (Pickens site) and partly elsewhere. Greenville
+needs a wideband SDR (about 10 MHz wide, such as an Airspy R2) or several dongles.
+Greenville's simulcast site is also the hardest kind to decode. In the listing, Pickens
+County's own fire dispatch and sheriff aren't on Palmetto 800 at all, which fits the
+county moving them to VHF.
+
 ## How the pieces fit
 
 ```
@@ -41,8 +77,10 @@ stays in the RADIO tile, never in ALERTS: scanner traffic isn't an official sour
 
 ## Phase 1: prove decoding on the Surface (test only)
 
+Steps and a starting config are in `docs/radio/`.
+
 1. Install trunk-recorder (AUR) on the Surface.
-2. Configure one site (the one nearest Clemson) and the chosen talkgroups.
+2. Configure the Pickens site (024) and the chosen talkgroups (`docs/radio/`).
 3. Run it through a busy evening while Ridgewatch runs.
 
 **Pass if:** the processor averages under about 50%, the Surface doesn't throttle from heat,

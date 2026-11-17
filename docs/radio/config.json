@@ -1,0 +1,31 @@
+{
+  "ver": 2,
+  "sources": [
+    {
+      "driver": "osmosdr",
+      "device": "rtl=0",
+      "center": 852500000,
+      "rate": 2560000,
+      "gain": 40,
+      "error": 0,
+      "digitalRecorders": 4,
+      "analogRecorders": 2
+    }
+  ],
+  "systems": [
+    {
+      "shortName": "pickens",
+      "type": "p25",
+      "control_channels": [
+        853600000
+      ],
+      "modulation": "fsk4",
+      "talkgroupsFile": "talkgroups.csv",
+      "recordUnknown": false,
+      "hideEncrypted": false,
+      "compressWav": false
+    }
+  ],
+  "captureDir": "/home/evan/radio/calls",
+  "logLevel": "info"
+}
