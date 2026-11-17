@@ -19,8 +19,8 @@ sys.path.insert(0, ROOT)
 
 from tests.fake_nws import (FakeNWS, alert, alerts, fires, grid, hourly, obs,  # noqa: E402
                             points, road_events, stations)
-from ridgewatch import (feeds, follow, geo, hospitals, locate, nws, panels,  # noqa: E402
-                        places, plain, power, settings, sound, sun, theme, ui, views)
+from ridgewatch import (backlight, feeds, follow, geo, hospitals, locate, nws,  # noqa: E402
+                        panels, places, plain, power, settings, sound, sun, theme, ui, views)
 from ridgewatch.panels import UNI  # noqa: E402
 
 
@@ -651,11 +651,92 @@ class Surface(unittest.TestCase):
         self.assertEqual(taps, [(5, 5)])
 
     def test_bar_buttons(self):
-        st = types.SimpleNamespace(mode="main", follow=True)
+        st = types.SimpleNamespace(mode="main", follow=True, off_since=None)
+        st._bar_buttons = lambda: panels.Panels._bar_buttons(st)
         labels = [b[1] for b in panels.Panels.bar_buttons(st)]
         self.assertEqual(labels, ["DISPLAY", "REFRESH", "FOLLOW GPS: ON", "SAVE HERE", "PLACES"])
         st.mode = "alerts"
         self.assertEqual([b[0] for b in panels.Panels.bar_buttons(st)], ["back", "up", "down"])
+        st.off_since = time.time()                          # shutdown counting down
+        self.assertEqual([b[0] for b in panels.Panels.bar_buttons(st)][:2], ["keep", "back"])
+
+    def power_stub(self, minutes=10):
+        st = types.SimpleNamespace(power=None, _power_at=0.0, off_since=None, keep_running=False,
+                                   off_warned=False, shutdown_failed=False, beeps=[], dirty=False,
+                                   flashes=[], shutdowns=[],
+                                   store=types.SimpleNamespace(config={"shutdown_after_min": minutes}))
+        st.flash = lambda text, level="ok", secs=4: st.flashes.append(text)
+        st.shutdown = lambda: st.shutdowns.append(1)
+        st.supply = {"pct": 80, "charging": False, "external": True}
+        st.read_battery = lambda: st.supply
+        return st
+
+    def test_shutdown_after_power_loss(self):
+        st = self.power_stub()
+        t = 1000.0
+        ui.UI.power_tick(st, t)
+        self.assertIsNone(st.off_since)                     # plugged in: nothing happens
+        st.supply = {"pct": 80, "charging": False, "external": False}   # ignition off
+        ui.UI.power_tick(st, t + 10)
+        self.assertEqual(st.off_since, t + 10)
+        self.assertEqual(len(st.beeps), 1)
+        self.assertIn("Shutting down in 10 minutes", st.flashes[-1])
+        ui.UI.power_tick(st, t + 10 + 9 * 60 + 5)           # one minute left: a second beep
+        self.assertEqual(len(st.beeps), 2)
+        self.assertEqual(st.shutdowns, [])
+        ui.UI.power_tick(st, t + 10 + 600)
+        self.assertEqual(st.shutdowns, [1])
+
+    def test_power_back_or_keep_running_cancels(self):
+        st = self.power_stub()
+        st.supply = {"pct": 80, "charging": False, "external": False}
+        ui.UI.power_tick(st, 1000.0)
+        st.supply = {"pct": 80, "charging": True, "external": True}      # ignition back on
+        ui.UI.power_tick(st, 1020.0)
+        self.assertIsNone(st.off_since)
+        self.assertEqual(st.flashes[-1], "Outside power is back")
+        st.supply = {"pct": 80, "charging": False, "external": False}
+        ui.UI.power_tick(st, 1040.0)
+        st.keep_running, st.off_since = True, None          # tapped KEEP RUNNING
+        ui.UI.power_tick(st, 1040.0 + 3600)
+        self.assertEqual((st.off_since, st.shutdowns), (None, []))
+        st = self.power_stub(minutes=0)                     # shutdown turned off in settings
+        st.supply = {"pct": 80, "charging": False, "external": False}
+        ui.UI.power_tick(st, 1000.0)
+        self.assertIsNone(st.off_since)
+        st = self.power_stub()                              # a machine with no battery
+        st.read_battery = lambda: None
+        ui.UI.power_tick(st, 1000.0)
+        self.assertIsNone(st.off_since)
+
+    def test_shutdown_command_failure_is_reported(self):
+        st = types.SimpleNamespace(poweroff_cmd=[shutil.which("false")], shutdown_failed=False,
+                                   store=types.SimpleNamespace(save_cache=lambda: None), flashes=[])
+        st.flash = lambda text, level="ok", secs=4: st.flashes.append(text)
+        ui.UI.shutdown(st)
+        self.assertTrue(st.shutdown_failed)
+        self.assertIn("polkit", st.flashes[-1])
+
+    def test_backlight(self):
+        base = self.sysfs({"intel_backlight": {"max_brightness": "7500", "brightness": "7500"}})
+        bl = backlight.Backlight(base, which=lambda p: None)
+        self.assertTrue(bl.set_pct(20))
+        with open(os.path.join(base, "intel_backlight", "brightness")) as f:
+            self.assertEqual(f.read().strip(), "1500")
+        self.assertFalse(bl.set_pct(20))                    # unchanged: not sent again
+        self.assertEqual(backlight.level(0, 7500), 1)       # never fully dark
+        base = self.sysfs({"intel_backlight": {"max_brightness": "7500"}})   # can't write: logind
+        bl = backlight.Backlight(base, which=lambda p: shutil.which("true"))
+        self.assertTrue(bl.set_pct(70))
+        bl.proc.wait()
+        self.assertFalse(backlight.Backlight("/no/such/folder").available())
+
+    def test_brightness_settings(self):
+        home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, home, True)
+        store = settings.Store(home)
+        self.assertEqual(store.config["brightness"], {"day": 100, "normal": 70, "night": 20})
+        self.assertEqual(store.config["shutdown_after_min"], 10)
 
 
 class EndToEnd(unittest.TestCase):

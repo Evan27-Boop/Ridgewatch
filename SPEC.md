@@ -36,8 +36,10 @@ will also show police and fire radio calls as text.
    shown as current and never silently dropped.
 7. **Touch first.** Tap a tile to open its details, and a bar of large buttons along
    the bottom for the everyday controls. The keyboard still works as a backup.
-8. **Power and sound.** Shows the battery level and whether it is charging. Beeps play
-   through the speakers, not only the terminal bell.
+8. **Power, sound and brightness.** Shows the battery level and whether it is charging.
+   Beeps play through the speakers, not only the terminal bell. Screen brightness follows
+   the day and night looks. When outside power is lost (ignition off), it shuts down
+   cleanly after 10 minutes unless power comes back or you tap KEEP RUNNING.
 9. **Radio (planned, not built).** A separate helper program turns scanner calls into
    text and hands them to a RADIO tile. Built only after the core is field-tested.
 
@@ -81,7 +83,8 @@ weather.
 
 ## Roadmap, in order
 
-1. Touch interface, battery level and speaker beeps (3.1.0).
+1. Touch interface, battery level and speaker beeps (3.1.0); brightness and
+   shutdown on power loss (3.2.0).
 2. Drive recorder and a rolling error log.
 3. Check each live feed against the real service; fix what's wrong.
 4. Appliance hardening: clock-jump-proof timers, startup self-check.

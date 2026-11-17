@@ -40,6 +40,7 @@ THEME = {
     "button": (245, ""),
     "button_on": (108, ""),
     "button_hit": (179, "bold"),
+    "button_alert": (203, "bold"),
 }
 
 TEMP_256 = [(-100, 93), (10, 99), (25, 63), (33, 69), (40, 75), (50, 79), (60, 114),
@@ -232,6 +233,10 @@ class Panels(Cluster):
         x = self.put(0, 2, " RIDGEWATCH ", "title")
         x = self.put(0, x, __version__ + " ", "dim")
         bt = power.tag(self.power)
+        left = self.shutdown_left()
+        if bt and left is not None:
+            when = "%d MIN" % max(1, -(-int(left) // 60)) if left > 60 else "%d S" % int(left)
+            bt = ("BATT %d%% %s SHUTDOWN IN %s" % (self.power["pct"], g["dot"], when), "err")
         if bt:
             x = self.put(0, x + 1, " %s " % bt[0], bt[1], curses.A_REVERSE | curses.A_BOLD) + 1
         if self.mode != "main":
@@ -315,7 +320,13 @@ class Panels(Cluster):
         return name, label
 
     def bar_buttons(self):
-        """[(action, label, spec)] for the button bar on this screen."""
+        """[(action, label, spec)] for the button bar on this screen. While a power-loss
+        shutdown is counting down, KEEP RUNNING comes first on every screen."""
+        keep = [("keep", "KEEP RUNNING", "button_alert")] \
+            if getattr(self, "off_since", None) is not None else []
+        return keep + self._bar_buttons()
+
+    def _bar_buttons(self):
         if self.mode == "main":
             return [("display", "DISPLAY", "button"), ("refresh", "REFRESH", "button"),
                     ("follow", "FOLLOW GPS: ON" if self.follow else "FOLLOW GPS: OFF",

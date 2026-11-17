@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.2.0 (2026-11-17): power and brightness
+
+- **Clean shutdown on power loss.** When outside power goes away (ignition off), a beep
+  and a 10-minute countdown in the top bar, another beep at one minute, then a clean
+  shutdown. Power coming back or the red KEEP RUNNING button calls it off. Needs polkit.
+  `"shutdown_after_min"` in config.json (0 turns it off).
+- **Brightness follows the look:** 100% day, 70% normal, 20% night, set through logind so
+  it needs no extra permissions. `"brightness"` in config.json (`false` turns it off).
+
 ## 3.1.0 (2026-11-17): touch
 
 Built for the Surface Go 2 as a dedicated touchscreen display.

@@ -21,13 +21,14 @@ when it's in range, which is how the dashboard gets data in the vehicle.
 ## 2. Packages and permissions
 
 ```
-sudo pacman -Syu python git cage foot ttf-dejavu alsa-utils openssh
+sudo pacman -Syu python git cage foot ttf-dejavu alsa-utils openssh polkit
 sudo usermod -aG uucp evan                  # GPS serial port; log out and back in
 sudo systemctl enable --now sshd systemd-timesyncd
 sudo timedatectl set-timezone America/New_York
 ```
 
 The clock matters: day and night colors, alert times and data ages all depend on it.
+polkit lets Ridgewatch shut the Surface down cleanly when the ignition turns off.
 
 ## 3. Ridgewatch
 
@@ -99,6 +100,22 @@ sudo mkdir -p /etc/systemd/journald.conf.d
 printf '[Journal]\nSystemMaxUse=50M\n' | sudo tee /etc/systemd/journald.conf.d/size.conf
 sudo systemctl restart systemd-journald
 ```
+
+## 8. Firmware: Battery Limit
+
+A tablet that is always plugged in wears out its battery. Turn on Battery Limit, which
+stops charging at 50%: hold **Volume Up** and press **Power** to open the Surface UEFI,
+then **Boot configuration → Kiosk Mode → Battery Limit: Enabled**. The top bar then reads
+PLUGGED IN instead of CHARGING.
+
+## In the vehicle
+
+- **Charger:** at least 24 W (USB-C PD at 15 V, or a Surface Connect car charger). A
+  phone-style USB port can't keep up and the battery drains while it runs.
+- **Ignition off:** Ridgewatch counts down 10 minutes, then shuts down. Press the power
+  button to start it again.
+- **Heat:** there is no fan. Keep it out of direct sun and don't leave it in a parked car
+  on a hot day.
 
 ## Maintenance
 

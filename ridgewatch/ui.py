@@ -8,7 +8,10 @@ import queue
 import re
 import time
 
-from . import feeds, follow, geo, hospitals, locate, nws, power, settings, sound, sun, theme, views
+import subprocess
+
+from . import (backlight, feeds, follow, geo, hospitals, locate, nws, power, settings, sound,
+               sun, theme, views)
 from . import places as places_mod
 from .panels import UNI, Palette, Panels
 
@@ -18,7 +21,8 @@ STATUS_QUIET = ("CHECKING", "STANDBY", "OFF")  # changes to or from these never 
 
 MOVING_RETURN_SEC = 30             # while moving, a detail screen returns to the gauges after this
 PRESS_SHOW_SEC = 0.35               # how long a tapped button stays lit
-POWER_EVERY_SEC = 30                # how often the battery level is read
+POWER_EVERY_SEC = 10                # how often the battery level is read
+POWEROFF_CMD = ["systemctl", "poweroff"]
 
 CLIMB_STEP_M = 3.0                  # elevation must move this much to count (GPS altitude jitters)
 
@@ -93,7 +97,14 @@ class UI(Panels):
         self.hits, self.buttons, self.pick_rows = [], [], []
         self.pressed = None                     # (action, lit until)
         self.power, self._power_at = None, 0.0
+        self.read_battery = power.battery
+        self.off_since = None                   # when outside power was lost (shutdown countdown)
+        self.keep_running = False               # KEEP RUNNING tapped: no shutdown until power returns
+        self.off_warned = False                 # the one-minute-left beep
+        self.shutdown_failed = False
+        self.poweroff_cmd = POWEROFF_CMD
         self.speaker = sound.Speaker(store.home, self._bell)
+        self.backlight = backlight.Backlight() if store.config.get("brightness") else None
         self._moving_at = 0
         self.last_key = time.time()
         # storm warnings around you (and which ones ahead you've been told about)
@@ -319,6 +330,8 @@ class UI(Panels):
             self.look = look
             self.pal.set_mode(look)
             self.dirty = True
+            if self.backlight:
+                self.backlight.set_pct(self.store.config["brightness"].get(look, 100))
 
     def nearby_states(self):
         """The states within about 25 miles, for the nearby-warnings search."""
@@ -443,13 +456,54 @@ class UI(Panels):
             self.dirty = True
 
     def power_tick(self, now):
-        if now - self._power_at < POWER_EVERY_SEC:
+        """Battery level, and the clean shutdown after outside power is lost: the ignition
+        turned off. Power coming back, or KEEP RUNNING, calls it off."""
+        if now - self._power_at >= POWER_EVERY_SEC:
+            self._power_at = now
+            b = self.read_battery()
+            if b != self.power:
+                self.power = b
+                self.dirty = True
+        limit = self.store.config.get("shutdown_after_min", 10) * 60
+        external = self.power["external"] if self.power else True   # no battery: nothing to do
+        if external:
+            if self.off_since is not None or self.keep_running:
+                self.flash("Outside power is back")
+            self.off_since, self.keep_running = None, False
+            self.off_warned = self.shutdown_failed = False
             return
-        self._power_at = now
-        b = power.battery()
-        if b != self.power:
-            self.power = b
-            self.dirty = True
+        if not limit or self.keep_running:
+            return
+        if self.off_since is None:
+            self.off_since = now
+            self.beeps = sorted(self.beeps + [now])
+            self.flash("Outside power lost. Shutting down in %d minutes." % (limit // 60), "warn", 8)
+            return
+        left = limit - (now - self.off_since)
+        if left <= 60 and not self.off_warned:
+            self.off_warned = True
+            self.beeps = sorted(self.beeps + [now])
+        if left <= 0 and not self.shutdown_failed:
+            self.shutdown()
+
+    def shutdown_left(self, now=None):
+        """Seconds until the power-loss shutdown, or None if none is coming."""
+        if self.off_since is None or self.shutdown_failed:
+            return None
+        now = time.time() if now is None else now
+        limit = self.store.config.get("shutdown_after_min", 10) * 60
+        return max(0, limit - (now - self.off_since))
+
+    def shutdown(self):
+        self.store.save_cache()
+        try:
+            rc = subprocess.call(self.poweroff_cmd, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        except (OSError, subprocess.SubprocessError):
+            rc = -1
+        if rc != 0:
+            self.shutdown_failed = True
+            self.flash("Could not shut down. Install polkit on this machine.", "err", 30)
 
     def status_tick(self, now):
         """One beep when the DATA LINK or GPS box settles on a new word (warnings beep
@@ -509,6 +563,8 @@ class UI(Panels):
                 self.ring(now)
                 # redraw fast while flashing, slowly when idle (easy on a laptop battery)
                 every = 0.25 if self.alarm_on() else 1.0 if (self.fetcher.busy or self.msg) else 5.0
+                if self.off_since is not None:
+                    every = min(every, 1.0)           # the shutdown countdown
                 if self.pressed and now < self.pressed[1] + 0.3:
                     every = 0.1                       # unlight the tapped button on time
                 if self.dirty or now - self.last_draw >= every:
@@ -806,6 +862,10 @@ class UI(Panels):
 
     def press(self, action):
         """What each bar button does. Most reuse the key that does the same thing."""
+        if action == "keep":
+            self.keep_running, self.off_since = True, None
+            self.flash("Shutdown cancelled. It stays on until outside power is lost again.")
+            return None
         if action == "save":
             return self.save_here()
         if action == "places":

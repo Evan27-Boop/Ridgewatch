@@ -80,6 +80,24 @@ class Store(object):
         if c.get("display") not in ("auto", "day", "night", "normal"):
             c["display"] = "auto"
         c["wildfires"] = bool(c.get("wildfires", True))
+        # screen brightness (percent) for each look; False leaves the backlight alone
+        bright = c.get("brightness", {}) if c.get("brightness", {}) is not False else False
+        if bright is not False:
+            if not isinstance(bright, dict):
+                bright = {}
+            out = {}
+            for look, pct in (("day", 100), ("normal", 70), ("night", 20)):
+                try:
+                    out[look] = max(5, min(100, int(bright.get(look, pct))))
+                except (TypeError, ValueError):
+                    out[look] = pct
+            bright = out
+        c["brightness"] = bright
+        # minutes on battery before a clean shutdown (0 = never)
+        try:
+            c["shutdown_after_min"] = max(0, int(c.get("shutdown_after_min", 10)))
+        except (TypeError, ValueError):
+            c["shutdown_after_min"] = 10
         keys = c.get("keys_511") if isinstance(c.get("keys_511"), dict) else {}
         c["keys_511"] = {"GA": str(keys.get("GA") or "").strip(),
                          "NC": str(keys.get("NC") or "").strip()}
