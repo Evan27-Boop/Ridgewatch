@@ -105,6 +105,11 @@ Touch first, keyboard as a backup. Tiles open their details; the button bar hold
 DISPLAY, REFRESH, FOLLOW GPS, SAVE HERE and PLACES. Every touch control works without
 typing. Typing a town name stays keyboard-only. There is no quit button.
 
+Volume: the tablet's volume buttons and the keyboard's volume keys work with no desktop
+running, and each change shows the new level. At start-up the sound is unmuted and
+raised to at least 50%, so warnings can't go silent; a MUTED tag stays in the top bar
+while it's muted.
+
 ## What was cut to get here
 
 Windows support, the built-in Windows screen driver, Windows location, ASCII mode,

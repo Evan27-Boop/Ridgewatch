@@ -1,4 +1,4 @@
-# Ridgewatch 3.4.0
+# Ridgewatch 3.4.1
 
 A vehicle awareness dashboard for the terminal. It keeps watch while you drive: official
 weather warnings, where you are, live GPS gauges, wildfires and road incidents.
@@ -55,8 +55,13 @@ somewhere else or the machine. Twice means act on it.
 
 Each item sounds once; one that disappears for over an hour and comes back sounds again.
 They play through the speakers (`pw-play`, `paplay` or `aplay`, whichever is installed),
-or the terminal bell if there's no audio player. At start-up Ridgewatch turns the system
-volume all the way up; set `"max_volume": false` in `config.json` to leave it alone.
+or the terminal bell if there's no audio player.
+
+**Volume.** The tablet's volume buttons and the keyboard's mute and volume keys work even
+with no desktop running (your user needs to be in the `input` group). Each press shows
+the new level in the top bar; while muted, a MUTED tag stays there. At start-up the sound
+is unmuted and raised to at least 50% (`"min_volume"` in `config.json`; 0 leaves it
+alone).
 
 On a machine with a battery, the top bar shows the level and whether it's charging:
 green when plugged in, amber on battery, red at 20% or less.
@@ -145,6 +150,7 @@ ridgewatch/places.py     offline towns and ZIP codes
 ridgewatch/hospitals.py  offline emergency rooms
 ridgewatch/sources.py    the strict source list
 ridgewatch/sound.py      beeps and buzzes through the speakers
+ridgewatch/volume.py     volume buttons and keys
 ridgewatch/power.py      battery level
 ridgewatch/backlight.py  screen brightness
 ridgewatch/geo.py sun.py theme.py settings.py plain.py   small helpers

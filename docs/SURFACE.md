@@ -22,7 +22,7 @@ when it's in range, which is how the dashboard gets data in the vehicle.
 
 ```
 sudo pacman -Syu python git cage foot ttf-dejavu alsa-utils openssh polkit
-sudo usermod -aG uucp evan                  # GPS serial port; log out and back in
+sudo usermod -aG uucp,input evan            # GPS port and volume keys; log out and back in
 sudo systemctl enable --now sshd systemd-timesyncd
 sudo timedatectl set-timezone America/New_York
 ```

@@ -244,6 +244,9 @@ class Panels(Cluster):
             bt = ("BATT %d%% %s SHUTDOWN IN %s" % (self.power["pct"], g["dot"], when), "err")
         if bt:
             x = self.put(0, x + 1, " %s " % bt[0], bt[1], curses.A_REVERSE | curses.A_BOLD) + 1
+        vol = getattr(self, "volume", None)
+        if vol and vol.on is False:                 # muted: warnings would be silent
+            x = self.put(0, x + 1, " MUTED ", "warn", curses.A_REVERSE | curses.A_BOLD) + 1
         if self.mode != "main":
             # the status boxes aren't on this screen: show both as colored tags instead
             for lab, (word, spec, _) in (("LINK", self.link_state()), ("GPS", self.gps_state())):

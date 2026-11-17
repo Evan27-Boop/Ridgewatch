@@ -80,7 +80,13 @@ class Store(object):
         if c.get("display") not in ("auto", "day", "night", "normal"):
             c["display"] = "auto"
         c["wildfires"] = bool(c.get("wildfires", True))
-        c["max_volume"] = bool(c.get("max_volume", True))     # turn the speakers all the way up
+        # start-up volume floor, percent (0 = leave it alone; older "max_volume": false too)
+        try:
+            c["min_volume"] = max(0, min(100, int(c.get("min_volume",
+                                                         0 if c.get("max_volume") is False else 50))))
+        except (TypeError, ValueError):
+            c["min_volume"] = 50
+        c.pop("max_volume", None)
         ap = c.get("airports", ["GSP", "CLT", "ATL"])          # flights: your airports
         c["airports"] = [str(a).strip().upper() for a in ap if str(a).strip()][:6] \
             if isinstance(ap, list) else ["GSP", "CLT", "ATL"]

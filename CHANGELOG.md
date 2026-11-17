@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.4.1 (2026-11-17)
+
+- **Volume buttons and keys work** under cage: the tablet's buttons and the keyboard's
+  mute, down and up keys, read straight from the kernel. Each press shows the new level;
+  a MUTED tag stays in the top bar while muted. Needs the user in the `input` group.
+- Start-up no longer forces 100%: it unmutes and raises the volume to at least 50%
+  (`"min_volume"`), otherwise leaving it where you set it.
+
 ## 3.4.0 (2026-11-17): strict alert sources
 
 - **A strict source list** (`sources.py`, and a table in SPEC.md). Every request goes

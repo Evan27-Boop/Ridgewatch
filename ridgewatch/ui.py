@@ -11,7 +11,7 @@ import time
 import subprocess
 
 from . import (backlight, feeds, follow, geo, hospitals, locate, nws, power, settings, sound,
-               sun, theme, views)
+               sun, theme, views, volume)
 from . import places as places_mod
 from .panels import UNI, Palette, Panels
 
@@ -103,8 +103,12 @@ class UI(Panels):
         self.off_warned = False                 # the one-minute-left beep
         self.shutdown_failed = False
         self.poweroff_cmd = POWEROFF_CMD
-        self.speaker = sound.Speaker(store.home, self._bell,
-                                     max_volume=store.config.get("max_volume", True))
+        self.speaker = sound.Speaker(store.home, self._bell)
+        self.vol_msgs = queue.Queue()           # volume changes from the key thread
+        self.volume = volume.Volume(lambda pct, on: self.vol_msgs.put((pct, on)),
+                                    floor=store.config.get("min_volume", 50))
+        self.volume.start()
+        self._vol_said = ""
         self.alert_beeps = []                   # times to play the warning (beep beep)
         self.cues = []                          # (time, "local" or "national") for new rows
         self.sound_ready = set()                # sources whose first load has been seen
@@ -720,6 +724,17 @@ class UI(Panels):
         return codes.get(seq, "esc")
 
     def drain(self):
+        while True:                                   # volume keys: say the new level
+            try:
+                pct, on = self.vol_msgs.get_nowait()
+            except queue.Empty:
+                break
+            self.flash("Sound muted" if not on else "Volume %d%%" % pct,
+                       "warn" if not on else "ok", 2)
+        if self.volume.problem and self.volume.problem != self._vol_said:
+            self._vol_said = self.volume.problem      # say it once
+            if not volume.under_desktop():
+                self.flash(self.volume.problem, "warn", 8)
         while True:
             try:
                 name, data, error = self.feedsf.results.get_nowait()

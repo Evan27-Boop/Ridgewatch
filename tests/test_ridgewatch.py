@@ -22,7 +22,7 @@ from tests.fake_nws import (FakeNWS, alert, alerts, duke, faa_xml, fires, grid, 
                             stations, usgs)
 from ridgewatch import (backlight, feeds, follow, geo, hospitals, locate, nws,  # noqa: E402
                         panels, places, plain, power, settings, sound, sources, sun, theme, ui,
-                        views)
+                        views, volume)
 from ridgewatch.panels import UNI  # noqa: E402
 
 
@@ -885,6 +885,92 @@ class AlertSources(unittest.TestCase):
         st.cues = []
         ui.UI.sound_new_rows(st, [row("e", "ipaws", "warning", "EVACUATION ORDER")], t + 5000)
         self.assertEqual(alarms[0][0]["event"], "Evacuation Order")         # warnings: the alarm
+
+
+class VolumeKeys(unittest.TestCase):
+    DEVICES = ("I: Bus=0003 Vendor=045e Product=096f Version=0111\n"
+               "N: Name=\"Microsoft Surface Keyboard Consumer Control\"\n"
+               "H: Handlers=kbd event7 \n"
+               "B: EV=1f\n"
+               "B: KEY=3f000303ff 0 0 483ffff17aff32d bfd4444600000000 1 130c730b17c000 "
+               "267bfad9415fed 9e168000004400 10000002\n\n"
+               "I: Bus=0018 Vendor=04f3 Product=2a1c Version=0100\n"
+               "N: Name=\"ELAN9038:00 04F3:2A1C\"\n"
+               "H: Handlers=mouse1 event5 \n"
+               "B: KEY=400 0 0 0 0 0\n")
+
+    def amixer(self, state):
+        def run(cmd):
+            state["calls"].append(cmd[2:])
+            if cmd[2] != state["control"]:
+                return ""
+            v = cmd[3] if len(cmd) > 3 else None
+            if v and v.endswith("%+"):
+                state["pct"] = min(100, state["pct"] + int(v[:-2]))
+            elif v and v.endswith("%-"):
+                state["pct"] = max(0, state["pct"] - int(v[:-2]))
+            elif v and v.endswith("%"):
+                state["pct"] = int(v[:-1])
+            if v == "toggle":
+                state["on"] = not state["on"]
+            elif "unmute" in cmd:
+                state["on"] = True
+            return "  Front Left: Playback 40 [%d%%] [-10.00dB] [%s]\n" % (
+                state["pct"], "on" if state["on"] else "off")
+        return run
+
+    def test_finds_the_keys_and_reads_the_level(self):
+        self.assertEqual(volume.key_devices(self.DEVICES), ["event7"])   # not the touchscreen
+        self.assertEqual(volume.parse_level("Mono: Playback 60 [70%] [-6.00dB] [off]"), (70, False))
+        self.assertEqual(volume.parse_level("nothing"), (None, None))
+
+    def test_floor_and_keys(self):
+        st = {"control": "Speaker", "pct": 20, "on": False, "calls": []}
+        said = []
+        v = volume.Volume(lambda p, on: said.append((p, on)), which=lambda n: "/usr/bin/amixer",
+                          run=self.amixer(st), floor=50)
+        self.assertEqual((v.control, v.level, v.on), ("Speaker", 50, True))   # raised and unmuted
+        v.press(volume.KEY_VOLUMEUP)
+        v.press(volume.KEY_MUTE)
+        self.assertEqual(said, [(55, True), (55, False)])
+        v.press(volume.KEY_VOLUMEDOWN)
+        self.assertEqual(said[-1], (50, False))           # down doesn't unmute; up does
+        st2 = {"control": "Master", "pct": 80, "on": True, "calls": []}
+        v2 = volume.Volume(which=lambda n: "/usr/bin/amixer", run=self.amixer(st2), floor=50)
+        self.assertEqual(v2.level, 80)                     # left where you set it
+        self.assertFalse(any(c[1:] for c in st2["calls"] if c[0] == "Master" and len(c) > 1))
+        v3 = volume.Volume(which=lambda n: None)
+        self.assertIn("alsa-utils", v3.problem)
+
+    def test_reads_key_events(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, True)
+        dev = os.path.join(folder, "event7")
+        os.mkfifo(dev)
+        writer = os.open(dev, os.O_RDWR)
+        self.addCleanup(os.close, writer)
+        devices = os.path.join(folder, "devices")
+        with open(devices, "w") as f:
+            f.write(self.DEVICES)
+        st = {"control": "Master", "pct": 60, "on": True, "calls": []}
+        said = []
+        v = volume.Volume(lambda p, on: said.append((p, on)), which=lambda n: "/usr/bin/amixer",
+                          run=self.amixer(st), floor=50)
+        old = os.environ.pop("XDG_CURRENT_DESKTOP", None)
+        try:
+            v.start(devices, folder)
+        finally:
+            if old is not None:
+                os.environ["XDG_CURRENT_DESKTOP"] = old
+        ev = volume.EVENT.pack(0, 0, volume.EV_KEY, volume.KEY_VOLUMEUP, 1) + \
+            volume.EVENT.pack(0, 0, volume.EV_KEY, volume.KEY_VOLUMEUP, 0) + \
+            volume.EVENT.pack(0, 0, 0, 0, 0)                 # press, release, sync
+        os.write(writer, ev)
+        for _ in range(50):
+            if said:
+                break
+            time.sleep(0.05)
+        self.assertEqual(said, [(65, True)])
 
 
 class EndToEnd(unittest.TestCase):

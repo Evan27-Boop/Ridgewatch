@@ -11,8 +11,8 @@ means act on it:
     national  buzz        a new national item
     system    buzz buzz   DATA LINK or GPS changed, outside power lost
 
-They're written fresh at start-up at near full scale, and the system volume is turned
-all the way up (alsa-utils' amixer) unless "max_volume" is false in config.json.
+They're written fresh at start-up at near full scale. The system volume is volume.py's
+job: your buttons set it, and start-up makes sure it isn't muted or too low.
 """
 
 import math
@@ -73,7 +73,7 @@ class Speaker(object):
     """Plays the beep without waiting for it. `bell` is called when there's no player
     or the player fails to start."""
 
-    def __init__(self, folder, bell, which=shutil.which, max_volume=True):
+    def __init__(self, folder, bell, which=shutil.which):
         self.bell = bell
         self.procs = []
         self.failures = 0
@@ -88,10 +88,6 @@ class Speaker(object):
                               count=count, buzz=buzz)
             except OSError:
                 self.player = None
-        amixer = which("amixer")
-        if max_volume and amixer:
-            for control in ("Master", "Speaker"):     # whichever the sound card has
-                self._run([amixer, "-q", "sset", control, "100%", "unmute"])
 
     def _run(self, cmd):
         try:
