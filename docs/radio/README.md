@@ -53,7 +53,10 @@ Do this over SSH while Ridgewatch runs on the screen, so the test is honest.
 around 30–40), then "Starting P25 Recorder" lines as calls happen, and new `.wav` and
 `.json` files appearing in `~/radio/calls`.
 
-**If nothing decodes:**
+**If nothing decodes** (Control Channel Message Decode Rate: 0/sec), first find which
+tower you can hear: `config-scan.json` tries every nearby site's control channel in turn
+(Pickens, Seneca, Caesars Head, Greenville Simulcast, Hogback). Run it the same way
+and watch which frequency starts decoding. Then:
 - Change `"modulation"` from `"fsk4"` to `"qpsk"` and restart.
 - Try `"gain"` 30 or 49.
 - Indoors, sit by a window facing the tower; the basic antenna is the weak link.
